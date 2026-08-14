@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: networkstream
+      POSTGRES_USER: networkstream
+      POSTGRES_PASSWORD: networkstream
+    ports: ["5432:5432"]
+    volumes: [networkstream_pg:/var/lib/postgresql/data]
+
+  api:
+    build: ./backend
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/networkstream
+      DB_USER: networkstream
+      DB_PASSWORD: networkstream
+    depends_on: [postgres]
+    ports: ["8080:8080"]
+
+volumes:
+  networkstream_pg:
