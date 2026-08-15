@@ -1,5 +1,4 @@
-insert into hotspots
-(id,name,provider_name,latitude,longitude,status,access_type,speed_mbps,price_inr,gateway_id)
+insert into hotspots(id,name,provider_name,latitude,longitude,status,access_type,speed_mbps,price_inr,gateway_id)
 values
 ('HS-A','Neighbour A Wi-Fi','Neighbour A',20.7050,77.0200,'ONLINE','FREE',20,0,'GW-A'),
 ('HS-B','Neighbour B Wi-Fi','Neighbour B',20.7070,77.0230,'ONLINE','FREE',30,0,'GW-B'),
