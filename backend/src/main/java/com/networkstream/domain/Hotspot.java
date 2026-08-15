@@ -41,10 +41,34 @@ public class Hotspot {
     @Column(name = "gateway_id", length = 64)
     private String gatewayId;
 
+    @Column(name = "bssid", length = 32)
+    private String bssid;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
     protected Hotspot() {}
+
+    public Hotspot(String id, String name, String providerName, double latitude, double longitude,
+                   String status, String accessType, int speedMbps, int priceInr, String gatewayId) {
+        this(id, name, providerName, latitude, longitude, status, accessType, speedMbps, priceInr, gatewayId, null);
+    }
+
+    public Hotspot(String id, String name, String providerName, double latitude, double longitude,
+                   String status, String accessType, int speedMbps, int priceInr, String gatewayId,
+                   String bssid) {
+        this.id = id;
+        this.name = name;
+        this.providerName = providerName;
+        this.latitude = latitude;
+        this.longitude = longitude;
+        this.status = status;
+        this.accessType = accessType;
+        this.speedMbps = speedMbps;
+        this.priceInr = priceInr;
+        this.gatewayId = gatewayId;
+        this.bssid = bssid;
+    }
 
     public String getId() { return id; }
     public String getName() { return name; }
@@ -56,4 +80,5 @@ public class Hotspot {
     public int getSpeedMbps() { return speedMbps; }
     public int getPriceInr() { return priceInr; }
     public String getGatewayId() { return gatewayId; }
+    public String getBssid() { return bssid; }
 }
