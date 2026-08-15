@@ -41,4 +41,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile gateway-agent/networkstream-agent.py
+      - run: python -m py_compile gateway-agent/networkstream-agent.py gateway-agent/networkstream-windows-agent.py
+      - run: python -m unittest gateway-agent/test_networkstream_windows_agent.py
