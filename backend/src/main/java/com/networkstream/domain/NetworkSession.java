@@ -20,6 +20,12 @@ public class NetworkSession {
     @Column(name = "gateway_id", length = 64)
     private String gatewayId;
 
+    @Column(name = "client_ip", length = 64)
+    private String clientIp;
+
+    @Column(name = "client_mac", length = 64)
+    private String clientMac;
+
     @Column(nullable = false, length = 32)
     private String plan;
 
@@ -43,19 +49,20 @@ public class NetworkSession {
 
     protected NetworkSession() {}
 
-    public NetworkSession(
-            String id,
-            String userId,
-            String hotspotId,
-            String gatewayId,
-            String plan,
-            int speedMbps,
-            int quotaMb
-    ) {
+    public NetworkSession(String id, String userId, String hotspotId, String gatewayId,
+                          String plan, int speedMbps, int quotaMb) {
+        this(id, userId, hotspotId, gatewayId, plan, speedMbps, quotaMb, null, null);
+    }
+
+    public NetworkSession(String id, String userId, String hotspotId, String gatewayId,
+                          String plan, int speedMbps, int quotaMb,
+                          String clientIp, String clientMac) {
         this.id = id;
         this.userId = userId;
         this.hotspotId = hotspotId;
         this.gatewayId = gatewayId;
+        this.clientIp = clientIp;
+        this.clientMac = clientMac;
         this.plan = plan;
         this.status = "ACTIVE";
         this.speedMbps = speedMbps;
@@ -68,6 +75,8 @@ public class NetworkSession {
     public String getUserId() { return userId; }
     public String getHotspotId() { return hotspotId; }
     public String getGatewayId() { return gatewayId; }
+    public String getClientIp() { return clientIp; }
+    public String getClientMac() { return clientMac; }
     public String getPlan() { return plan; }
     public String getStatus() { return status; }
     public int getSpeedMbps() { return speedMbps; }
