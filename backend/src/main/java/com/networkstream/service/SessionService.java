@@ -15,18 +15,13 @@ import java.util.UUID;
 
 @Service
 public class SessionService {
-
     private final NetworkSessionRepository sessions;
     private final HotspotRepository hotspots;
     private final UsageEventRepository usageEvents;
     private final GatewayService gateways;
 
-    public SessionService(
-            NetworkSessionRepository sessions,
-            HotspotRepository hotspots,
-            UsageEventRepository usageEvents,
-            GatewayService gateways
-    ) {
+    public SessionService(NetworkSessionRepository sessions, HotspotRepository hotspots,
+                          UsageEventRepository usageEvents, GatewayService gateways) {
         this.sessions = sessions;
         this.hotspots = hotspots;
         this.usageEvents = usageEvents;
@@ -35,120 +30,59 @@ public class SessionService {
 
     @Transactional
     public ApiModels.Session connect(ApiModels.ConnectRequest request) {
-
         Hotspot hotspot = hotspots.findById(request.hotspotId())
                 .orElseThrow(() -> notFound("Hotspot not found: " + request.hotspotId()));
-
-        if (hotspot.getGatewayId() == null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Hotspot has no gateway"
-            );
-        }
-
+        if (hotspot.getGatewayId() == null) throw new ResponseStatusException(HttpStatus.CONFLICT, "Hotspot has no gateway");
         String gatewayId = hotspot.getGatewayId();
-
         int speed = Math.min(5, hotspot.getSpeedMbps());
-
-        NetworkSession session = new NetworkSession(
-                "SES-" + UUID.randomUUID(),
-                request.userId(),
-                hotspot.getId(),
-                gatewayId,
-                "FREE",
-                speed,
-                500
-        );
-
-        NetworkSession saved = sessions.save(session);
-
+        NetworkSession saved = sessions.save(new NetworkSession("SES-" + UUID.randomUUID(), request.userId(),
+                hotspot.getId(), gatewayId, "FREE", speed, 500, request.clientIp(), request.clientMac()));
         gateways.bumpPolicy(gatewayId);
-
+        if (request.clientIp() != null && !request.clientIp().isBlank()) {
+            gateways.enqueueCommand(gatewayId, "ALLOW_CLIENT", saved.getId(), request.clientIp());
+        }
         return toModel(saved);
     }
 
     @Transactional
-    public ApiModels.Session usage(
-            String id,
-            ApiModels.UsageRequest request
-    ) {
+    public ApiModels.Session usage(String id, ApiModels.UsageRequest request) {
         NetworkSession session = getEntity(id);
-
         long bytes = Math.max(0, request.bytesUsed());
-
         session.addUsageBytes(bytes);
         NetworkSession saved = sessions.save(session);
-
-        usageEvents.save(
-                new com.networkstream.domain.UsageEvent(
-                        id,
-                        0,
-                        0,
-                        bytes,
-                        "SIMULATOR"
-                )
-        );
-
+        usageEvents.save(new com.networkstream.domain.UsageEvent(id, 0, 0, bytes, "SIMULATOR"));
         return toModel(saved);
     }
 
     @Transactional
     public ApiModels.Session upgrade(String id) {
-
-        NetworkSession session = getEntity(id);
-
-        session.upgrade();
-
-        NetworkSession saved = sessions.save(session);
-
-        gateways.bumpPolicy(session.getGatewayId());
-
+        NetworkSession session = getEntity(id); session.upgrade();
+        NetworkSession saved = sessions.save(session); gateways.bumpPolicy(session.getGatewayId());
         return toModel(saved);
     }
 
     @Transactional
     public ApiModels.Session end(String id) {
-
-        NetworkSession session = getEntity(id);
-
-        session.end();
-
-        NetworkSession saved = sessions.save(session);
-
-        gateways.bumpPolicy(session.getGatewayId());
-
+        NetworkSession session = getEntity(id); session.end();
+        NetworkSession saved = sessions.save(session); gateways.bumpPolicy(session.getGatewayId());
+        if (session.getClientIp() != null && !session.getClientIp().isBlank()) {
+            gateways.enqueueCommand(session.getGatewayId(), "BLOCK_CLIENT", session.getId(), session.getClientIp());
+        }
         return toModel(saved);
     }
 
     @Transactional(readOnly = true)
-    public ApiModels.Session get(String id) {
-        return toModel(getEntity(id));
-    }
+    public ApiModels.Session get(String id) { return toModel(getEntity(id)); }
 
     private NetworkSession getEntity(String id) {
-        return sessions.findById(id)
-                .orElseThrow(() -> notFound("Session not found: " + id));
+        return sessions.findById(id).orElseThrow(() -> notFound("Session not found: " + id));
     }
 
     private ApiModels.Session toModel(NetworkSession s) {
-        return new ApiModels.Session(
-                s.getId(),
-                s.getUserId(),
-                s.getHotspotId(),
-                s.getGatewayId(),
-                s.getPlan(),
-                s.getStatus(),
-                s.getSpeedMbps(),
-                s.getQuotaMb(),
-                s.getUsedMb(),
-                s.getCreatedAt()
-        );
+        return new ApiModels.Session(s.getId(), s.getUserId(), s.getHotspotId(), s.getGatewayId(), s.getPlan(),
+                s.getStatus(), s.getSpeedMbps(), s.getQuotaMb(), s.getUsedMb(), s.getCreatedAt(),
+                s.getClientIp(), s.getClientMac());
     }
 
-    private ResponseStatusException notFound(String message) {
-        return new ResponseStatusException(
-                HttpStatus.NOT_FOUND,
-                message
-        );
-    }
+    private ResponseStatusException notFound(String message) { return new ResponseStatusException(HttpStatus.NOT_FOUND, message); }
 }

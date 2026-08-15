@@ -35,9 +35,7 @@ public class HotspotObservationService {
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "Gateway not registered: " + gatewayId));
 
         Instant observedAt = report.observedAt() == null ? Instant.now() : report.observedAt();
-        if (report.hotspots() == null) {
-            return;
-        }
+        if (report.hotspots() == null) return;
 
         for (ApiModels.HotspotObservation item : report.hotspots()) {
             if (item == null || item.ssid() == null || item.ssid().isBlank()) continue;
@@ -55,11 +53,12 @@ public class HotspotObservationService {
 
             if (existing == null) {
                 observations.save(new HotspotObservation(
-                        gatewayId, ssid, bssid, item.signalDbm(),
-                        item.frequency(), item.security(), itemObservedAt));
+                        gatewayId, ssid, bssid, item.signalDbm(), item.frequency(), item.security(),
+                        itemObservedAt, item.signalPercent()));
             } else {
                 existing.updateObservation(
-                        ssid, bssid, item.signalDbm(), item.frequency(), item.security(), itemObservedAt);
+                        ssid, bssid, item.signalDbm(), item.signalPercent(),
+                        item.frequency(), item.security(), itemObservedAt);
                 observations.save(existing);
             }
         }
@@ -82,7 +81,7 @@ public class HotspotObservationService {
         return unique.values().stream()
                 .map(o -> new ApiModels.HotspotObservation(
                         o.getGatewayId(), o.getSsid(), o.getBssid(), o.getSignalDbm(),
-                        o.getFrequency(), o.getSecurity(), o.getObservedAt()))
+                        o.getFrequency(), o.getSecurity(), o.getObservedAt(), o.getSignalPercent()))
                 .toList();
     }
 

@@ -32,10 +32,20 @@ public class GatewayCommand {
 
     protected GatewayCommand() {}
 
+    public GatewayCommand(String gatewayId, String type, String sessionId, String value) {
+        this.gatewayId = gatewayId;
+        this.type = type;
+        this.sessionId = sessionId;
+        this.value = value;
+        this.createdAt = Instant.now();
+    }
+
     public Long getId() { return id; }
     public String getGatewayId() { return gatewayId; }
     public String getType() { return type; }
     public String getSessionId() { return sessionId; }
     public String getValue() { return value; }
     public boolean isAcknowledged() { return acknowledged; }
+
+    public void acknowledge() { this.acknowledged = true; }
 }
