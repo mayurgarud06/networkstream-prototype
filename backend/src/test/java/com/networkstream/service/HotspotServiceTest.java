@@ -29,14 +29,9 @@ class HotspotServiceTest {
     @Test
     void enrollRequiresRegisteredGateway() {
         when(gateways.findById("GW-1")).thenReturn(Optional.empty());
-
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.enroll(request));
-
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
         assertEquals(404, ex.getStatusCode().value());
     }
 
@@ -53,9 +48,7 @@ class HotspotServiceTest {
         });
 
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA-BB-CC-DD-EE-FF", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
+                "MyPhone", "AA-BB-CC-DD-EE-FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
         var result = service.enroll(request);
 
         assertNotNull(saved.get());
@@ -76,39 +69,25 @@ class HotspotServiceTest {
         when(hotspots.findByGatewayIdAndName("GW-1", "MyPhone")).thenReturn(Optional.of(existing));
 
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
         var result = service.enroll(request);
 
         assertEquals("HS-EXISTING", result.id());
     }
 
     @Test
-    void enrollRejectsInvalidSpeed() {
-        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
-
+    void enrollRejectsInvalidSpeedBeforeGatewayLookup() {
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 0, 0, "GW-1");
-
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.enroll(request));
-
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 0, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
         assertEquals(400, ex.getStatusCode().value());
     }
 
     @Test
-    void enrollRejectsInvalidBssid() {
-        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
-
+    void enrollRejectsInvalidBssidBeforeGatewayLookup() {
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "not-a-mac", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.enroll(request));
-
+                "MyPhone", "not-a-mac", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
         assertEquals(400, ex.getStatusCode().value());
     }
 }
