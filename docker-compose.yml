@@ -7,6 +7,11 @@ services:
       POSTGRES_PASSWORD: networkstream
     ports: ["5432:5432"]
     volumes: [networkstream_pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U networkstream -d networkstream"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   api:
     build: ./backend
@@ -14,8 +19,17 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/networkstream
       DB_USER: networkstream
       DB_PASSWORD: networkstream
-    depends_on: [postgres]
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports: ["8080:8080"]
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://api:8080
+    depends_on: [api]
+    ports: ["3000:3000"]
 
 volumes:
   networkstream_pg:
