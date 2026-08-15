@@ -1,0 +1,90 @@
+package com.networkstream.service;
+
+import com.networkstream.api.ApiModels;
+import com.networkstream.domain.Gateway;
+import com.networkstream.domain.HotspotObservation;
+import com.networkstream.repository.GatewayRepository;
+import com.networkstream.repository.HotspotObservationRepository;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class HotspotObservationServiceTest {
+
+    @Mock HotspotObservationRepository observations;
+    @Mock GatewayRepository gateways;
+    @InjectMocks HotspotObservationService service;
+
+    @Test
+    void reportRequiresRegisteredGateway() {
+        when(gateways.findById("GW-1")).thenReturn(Optional.empty());
+        var report = new ApiModels.HotspotScanReport("GW-1", Instant.now(), List.of());
+
+        var ex = assertThrows(ResponseStatusException.class, () -> service.report("GW-1", report));
+
+        assertEquals(404, ex.getStatusCode().value());
+        verify(observations, never()).save(any());
+    }
+
+    @Test
+    void reportRejectsGatewayIdMismatch() {
+        var report = new ApiModels.HotspotScanReport("GW-OTHER", Instant.now(), List.of());
+
+        var ex = assertThrows(ResponseStatusException.class, () -> service.report("GW-1", report));
+
+        assertEquals(400, ex.getStatusCode().value());
+        verifyNoInteractions(gateways);
+        verify(observations, never()).save(any());
+    }
+
+    @Test
+    void reportPersistsOnlyNonBlankObservedSsids() {
+        Instant t = Instant.parse("2026-08-15T10:00:00Z");
+        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
+        var report = new ApiModels.HotspotScanReport("GW-1", t, List.of(
+                new ApiModels.HotspotObservation("GW-1", " PhoneA ", "aa:bb", null, "2412 MHz", "WPA2", t),
+                new ApiModels.HotspotObservation("GW-1", "   ", "cc:dd", -50, "2437 MHz", "WPA2", t)));
+
+        service.report("GW-1", report);
+
+        ArgumentCaptor<HotspotObservation> captor = ArgumentCaptor.forClass(HotspotObservation.class);
+        verify(observations, times(1)).save(captor.capture());
+        assertEquals("PhoneA", captor.getValue().getSsid());
+        assertEquals("GW-1", captor.getValue().getGatewayId());
+        assertEquals(t, captor.getValue().getObservedAt());
+    }
+
+    @Test
+    void reportRejectsObservationBelongingToAnotherGateway() {
+        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
+        var report = new ApiModels.HotspotScanReport("GW-1", Instant.now(), List.of(
+                new ApiModels.HotspotObservation("GW-2", "PhoneB", "aa:bb", null, "2412 MHz", "OPEN", null)));
+
+        var ex = assertThrows(ResponseStatusException.class, () -> service.report("GW-1", report));
+
+        assertEquals(400, ex.getStatusCode().value());
+        verify(observations, never()).save(any());
+    }
+
+    @Test
+    void reportAcceptsNullHotspotListAsEmptyScan() {
+        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
+        var report = new ApiModels.HotspotScanReport("GW-1", Instant.now(), null);
+
+        assertDoesNotThrow(() -> service.report("GW-1", report));
+        verify(observations, never()).save(any());
+    }
+}
