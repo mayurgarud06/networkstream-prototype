@@ -10,9 +10,10 @@ public final class ApiModels {
                           String status, String accessType, int speedMbps, int priceInr, String gatewayId) {}
 
     public record Session(String id, String userId, String hotspotId, String gatewayId, String plan,
-                          String status, int speedMbps, int quotaMb, int usedMb, Instant createdAt) {}
+                          String status, int speedMbps, int quotaMb, int usedMb, Instant createdAt,
+                          String clientIp, String clientMac) {}
 
-    public record ConnectRequest(String userId, String hotspotId) {}
+    public record ConnectRequest(String userId, String hotspotId, String clientIp, String clientMac) {}
     public record UsageRequest(long bytesUsed) {}
 
     public record GatewayRegistrationRequest(String gatewayId, String hotspotId, String version,
@@ -31,5 +32,18 @@ public final class ApiModels {
 
     public record HotspotScanReport(String gatewayId, Instant observedAt, List<HotspotObservation> hotspots) {}
     public record HotspotObservation(String gatewayId, String ssid, String bssid, Integer signalDbm,
-                                     String frequency, String security, Instant observedAt) {}
+                                     String frequency, String security, Instant observedAt,
+                                     Integer signalPercent) {
+        public HotspotObservation(String gatewayId, String ssid, String bssid, Integer signalDbm,
+                                  String frequency, String security, Instant observedAt) {
+            this(gatewayId, ssid, bssid, signalDbm, frequency, security, observedAt, null);
+        }
+    }
+
+    public record GatewayTelemetry(String gatewayId, Instant observedAt, boolean internetOnline,
+                                   String upstreamInterface, String upstreamAddress,
+                                   String downstreamInterface, String downstreamAddress,
+                                   List<GatewayClient> clients) {}
+
+    public record GatewayClient(String ipAddress, String macAddress, String hostname) {}
 }
