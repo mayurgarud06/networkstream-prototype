@@ -15,7 +15,8 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-VERSION = "0.5.0-windows-agent"
+VERSION = "0.5.1-windows-agent"
+INTERNET_TEST_URL = "https://www.msftconnecttest.com/connecttest.txt"
 
 
 def run(cmd):
@@ -37,6 +38,15 @@ def get_json(url):
     with urllib.request.urlopen(request, timeout=8) as response:
         body = response.read().decode("utf-8")
         return json.loads(body) if body else None
+
+
+def internet_reachable():
+    """Check whether the gateway's current upstream connection reaches the Internet."""
+    try:
+        with urllib.request.urlopen(INTERNET_TEST_URL, timeout=5) as response:
+            return response.status == 200
+    except Exception:
+        return False
 
 
 def channel_to_frequency(channel):
@@ -78,8 +88,6 @@ def scan_wifi():
             current_encryption = None
             continue
 
-        # netsh prints Authentication/Encryption before BSSID. Keep them
-        # pending so each BSSID gets the correct security metadata.
         match = re.match(r"Authentication\s*:\s*(.*)$", line, re.IGNORECASE)
         if match:
             current_auth = match.group(1).strip() or "OPEN"
@@ -180,15 +188,17 @@ def main():
     parser.add_argument("--api", default="http://127.0.0.1:8080")
     parser.add_argument("--gateway-id", default=f"WIN-{socket.gethostname()}")
     parser.add_argument("--hotspot-id", default=None)
-    parser.add_argument("--scan", action="store_true")
+    parser.add_argument("--scan", action="store_true", help="Explicitly enable Wi-Fi scanning (now enabled by default)")
+    parser.add_argument("--no-scan", action="store_true", help="Disable Wi-Fi scanning")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=int, default=30)
     args = parser.parse_args()
+    scan_enabled = not args.no_scan
 
     print("NetworkStream Windows Gateway Agent", VERSION)
     print("gateway:", args.gateway_id)
     print("host:", socket.gethostname())
-    print("NOTE: observation/control-plane only; no Windows routing or firewall changes")
+    print("NOTE: observation/control-plane only; no Windows routing, firewall, or ICS changes")
 
     try:
         print("register:", register(args.api, args.gateway_id, args.hotspot_id))
@@ -199,7 +209,8 @@ def main():
     while True:
         try:
             print("heartbeat:", heartbeat(args.api, args.gateway_id))
-            if args.scan:
+            print("internet:", "ONLINE" if internet_reachable() else "OFFLINE")
+            if scan_enabled:
                 networks = scan_wifi()
                 print(f"nearby Wi-Fi networks: {len(networks)}")
                 for network in networks:

@@ -55,4 +55,14 @@ public class HotspotObservation {
     public String getFrequency() { return frequency; }
     public String getSecurity() { return security; }
     public Instant getObservedAt() { return observedAt; }
+
+    public void updateObservation(String ssid, String bssid, Integer signalDbm,
+                                  String frequency, String security, Instant observedAt) {
+        this.ssid = ssid;
+        this.bssid = bssid;
+        this.signalDbm = signalDbm;
+        this.frequency = frequency;
+        this.security = security;
+        this.observedAt = observedAt == null ? Instant.now() : observedAt;
+    }
 }

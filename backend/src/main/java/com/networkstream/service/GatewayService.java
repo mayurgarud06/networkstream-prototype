@@ -74,6 +74,11 @@ public class GatewayService {
     }
 
     @Transactional(readOnly = true)
+    public List<Gateway> list() {
+        return gateways.findAll();
+    }
+
+    @Transactional(readOnly = true)
     public Gateway get(String id) {
         return gateways.findById(id)
                 .orElseThrow(() -> notFound("Gateway not found: " + id));
