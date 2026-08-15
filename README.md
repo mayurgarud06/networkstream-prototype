@@ -1,59 +1,109 @@
 # NetworkStream Prototype Pack
 
-Goal: run a safe end-to-end prototype using an ordinary Linux laptop/PC and an existing Wi-Fi router.
+NetworkStream is a software-first connectivity control plane with a Linux software gateway. The repository supports local simulation and a real Linux lab gateway path.
 
-## Prototype modes
+## Mode A — Local simulation
 
-### Mode A — Local simulation
-Cloud API + PostgreSQL + web app + two gateway simulators.
+```bash
+docker compose up --build
+cd frontend
+npm install
+npm run dev
+```
 
-### Mode B — Real Linux gateway (safe first test)
-Run `gateway-agent/networkstream-agent.py --dry-run`.
-It inspects interfaces/routes and sends heartbeat only. It does NOT alter firewall/routing.
+Run a gateway simulator:
 
-### Mode C — Real access-network experiment
-Only after Mode B works. The gateway dataplane should be placed between a test client and test uplink, never a production network.
+```bash
+cd gateway-simulator
+npm install
+GATEWAY_ID=GW-A npm start
+```
 
-## Start
+## Mode B — Real Linux gateway and hotspot exploration
 
-1. Start PostgreSQL + API:
-   docker compose up --build
+The Linux agent can inspect interfaces/routes and scan nearby Wi-Fi without associating with discovered networks.
 
-2. Start frontend:
-   cd frontend
-   npm install
-   npm run dev
+```bash
+python3 gateway-agent/networkstream-agent.py \
+  --api http://YOUR_API:8080 \
+  --gateway-id TEST-GW \
+  --dry-run --scan --once
+```
 
-3. Start a gateway simulator:
-   cd gateway-simulator
-   npm install
-   GATEWAY_ID=GW-A npm start
+`--dry-run` never changes forwarding, firewall or traffic-control configuration. The Wi-Fi scan is physical radio discovery performed by the Linux gateway.
 
-4. Open:
-   http://localhost:3000
+Open the frontend and use **Nearby Wi-Fi observed by gateways**. These observations are deliberately separate from approved NetworkStream hotspots: discovering an SSID does not mean NetworkStream has permission to use it.
 
-## Real Linux test
+## Mode C — Isolated lab gateway dataplane
 
-python3 gateway-agent/networkstream-agent.py --api http://YOUR_API:8080 --gateway-id TEST-GW --dry-run --once
+Only use this on a dedicated lab topology with separate uplink and test-client/downlink interfaces.
 
-## Test checklist
+```bash
+sudo python3 gateway-agent/networkstream-agent.py \
+  --api http://YOUR_API:8080 \
+  --gateway-id LAB-GW \
+  --apply --lab-mode \
+  --uplink-iface eth0 \
+  --downlink-iface eth1 \
+  --lab-cidr 10.77.0.0/24 \
+  --rate 20mbit
+```
 
-- [ ] API health works
-- [ ] Hotspots appear
-- [ ] Free session can be created
-- [ ] Usage increments
-- [ ] Premium upgrade works
-- [ ] Gateway heartbeat appears
-- [ ] Linux agent reports interfaces/routes
-- [ ] Test router/client topology documented
-- [ ] Captive portal tested on an isolated lab network
-- [ ] Bandwidth policy tested
-- [ ] Usage metering compared against router counters
-- [ ] Roaming experiment completed
+The explicit `--apply --lab-mode` gate is intentional. It enables IPv4 forwarding, NAT and an aggregate traffic shaper for the isolated lab. Do not run it against a production router/network.
+
+## Gateway control-plane protocol
+
+- `POST /api/gateways/{id}/register`
+- `POST /api/gateways/{id}/heartbeat`
+- `GET /api/gateways/{id}/policy`
+- `POST /api/gateways/{id}/usage`
+- `POST /api/gateways/{id}/scan`
+- `GET /api/gateways/{id}/commands`
+- `GET /api/hotspots/observed?seconds=180`
+
+## Prototype checklist
+
+- [x] API health works
+- [x] Managed hotspots appear
+- [x] Free session can be created
+- [x] Usage simulation remains available for control-plane tests
+- [x] Premium upgrade works as a prototype entitlement transition
+- [x] Gateway registration and heartbeat
+- [x] Gateway policy, usage and command APIs
+- [x] Linux interface/route discovery
+- [x] Real nearby Wi-Fi radio scan and scan ingestion
+- [x] Frontend exploration of observed networks
+- [x] Explicitly guarded isolated-lab NAT/forwarding/shaping path
+- [ ] Captive portal on an isolated lab network
+- [ ] Per-client authentication and isolation
+- [ ] Per-client bandwidth policy enforcement
+- [ ] Gateway byte counters reconciled against router counters
+- [ ] Roaming experiment
+- [ ] Production authentication, TLS, rate limiting and gateway credentials
+- [ ] Payments, provider rewards and settlement
+
+## Real lab topology
+
+```text
+                 INTERNET
+                    |
+               TEST UPLINK
+                    |
+             +--------------+
+             | Linux PC     |
+             | NetworkStream|
+             | Gateway      |
+             +------+-------+
+                    |
+              TEST Wi-Fi/AP
+                    |
+              +-----+-----+
+              |           |
+            Phone       Laptop
+```
+
+The gateway is the software dataplane. The existing router/uplink remains the Internet source; dedicated gateway hardware is not required for this prototype.
 
 ## Safety
 
-Do not enable experimental forwarding/firewall rules on a production router.
-Do not expose the API directly to the Internet without TLS, authentication and
-rate limiting. Do not collect real user traffic until privacy, security and
-network-isolation controls are implemented.
+Do not enable experimental forwarding/firewall rules on a production router. Do not expose the API directly to the Internet without TLS, authentication and rate limiting. Do not collect real user traffic until privacy, security and network-isolation controls are implemented.
