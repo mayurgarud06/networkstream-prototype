@@ -30,4 +30,5 @@ public final class ApiModels {
     public record HotspotScanReport(String gatewayId, Instant observedAt, List<HotspotObservation> hotspots) {}
     public record HotspotObservation(String gatewayId, String ssid, String bssid, Integer signalDbm,
                                      String frequency, String security, Instant observedAt) {}
+    public record GatewayScanResponse(String status) {}
 }
