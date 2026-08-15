@@ -4,7 +4,7 @@ This is the real-hardware control-plane experiment for one Windows laptop and tw
 
 ## What the gateway does
 
-The Windows gateway registers with NetworkStream, sends heartbeats, scans nearby Wi-Fi using the laptop's physical adapter, reports those observations, and reads policy/commands.
+The Windows gateway registers with NetworkStream, sends heartbeats, checks that the laptop's current uplink reaches the Internet, scans nearby Wi-Fi using the laptop's physical adapter, reports those observations, and reads policy/commands.
 
 It deliberately does **not** modify Windows routing, firewall rules, Internet Connection Sharing, or adapter configuration.
 
@@ -39,6 +39,8 @@ curl http://localhost:8080/api/hotspots
 
 Enable Phone A hotspot and connect Windows to it. This is the laptop's Internet uplink.
 
+The Windows agent also reports `internet: ONLINE/OFFLINE` by testing the laptop's current upstream connection. This verifies the gateway machine's Internet path; it does not prove that a separate downstream client can already route through NetworkStream.
+
 ## 3. Verify Windows can see real Wi-Fi
 
 ```powershell
@@ -47,28 +49,26 @@ netsh wlan show networks mode=bssid
 
 This output comes from Windows Wi-Fi discovery, not the NetworkStream database.
 
-## 4. Run the NetworkStream Windows gateway
+## 4. Install the NetworkStream Windows gateway for continuous operation
 
-From the repository root:
+Instead of manually starting the Python process for every scan, install it as a Windows scheduled task once:
 
 ```powershell
-python .\gateway-agent\networkstream-windows-agent.py `
-  --api http://localhost:8080 `
-  --gateway-id WIN-LAPTOP-01 `
-  --scan `
-  --once
+powershell -ExecutionPolicy Bypass -File .\gateway-agent\install-windows-agent.ps1 `
+  -Api http://localhost:8080 `
+  -GatewayId WIN-LAPTOP-01 `
+  -Interval 30
 ```
 
-The agent registers `WIN-LAPTOP-01`, sends a heartbeat, scans nearby Wi-Fi, posts `/api/gateways/WIN-LAPTOP-01/scan`, and reads policy/commands.
+The task starts at user logon and keeps the gateway registered, heartbeating and scanning. The agent scans by default; use `--no-scan` only when observation is intentionally disabled.
 
-For continuous observation:
+For a one-shot diagnostic run:
 
 ```powershell
 python .\gateway-agent\networkstream-windows-agent.py `
   --api http://localhost:8080 `
   --gateway-id WIN-LAPTOP-01 `
-  --scan `
-  --interval 15
+  --once
 ```
 
 ## 5. Verify observations
@@ -77,19 +77,20 @@ python .\gateway-agent\networkstream-windows-agent.py `
 curl "http://localhost:8080/api/hotspots/observed?seconds=300"
 ```
 
-The returned observations should contain SSIDs/BSSIDs seen by `WIN-LAPTOP-01`.
+The returned observations are deduplicated by BSSID when one is available. Repeated scans refresh the existing observation rather than creating a new logical entry.
 
 ## 6. Register and enroll from the website
 
 Open the frontend and use **Provider**:
 
 1. Register `WIN-LAPTOP-01` with the same ID used by the agent.
-2. Go to **Discover**.
-3. Find a Wi-Fi network that you control/are authorized to provide.
-4. Choose **Enroll this network**.
-5. Confirm SSID/BSSID, provider, location, speed, price and gateway.
-6. Submit **Enroll hotspot**.
-7. Return to **Discover** and verify the network appears under managed NetworkStream hotspots.
+2. The **Registered gateways** section should show the actual gateway record.
+3. Go to **Discover**.
+4. Find a Wi-Fi network that you control/are authorized to provide.
+5. Choose **Enroll this network**.
+6. Confirm SSID/BSSID, provider, location, speed, price and gateway.
+7. Submit **Enroll hotspot**.
+8. Return to **Discover** and verify the network appears under managed NetworkStream hotspots.
 
 A discovered SSID is only an observation. It is never automatically enrolled.
 
