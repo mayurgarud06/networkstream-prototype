@@ -24,18 +24,27 @@ public class HotspotObservationService {
 
     @Transactional
     public void report(String gatewayId, ApiModels.HotspotScanReport report) {
-        if (report == null || report.gatewayId() == null || !gatewayId.equals(report.gatewayId())) {
+        if (gatewayId == null || gatewayId.isBlank()
+                || report == null || report.gatewayId() == null
+                || !gatewayId.equals(report.gatewayId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Gateway ID mismatch");
         }
         gateways.findById(gatewayId).orElseThrow(() ->
                 new ResponseStatusException(HttpStatus.NOT_FOUND, "Gateway not registered: " + gatewayId));
 
         Instant observedAt = report.observedAt() == null ? Instant.now() : report.observedAt();
+        if (report.hotspots() == null) {
+            return;
+        }
+
         for (ApiModels.HotspotObservation item : report.hotspots()) {
-            if (item.ssid() == null || item.ssid().isBlank()) continue;
+            if (item == null || item.ssid() == null || item.ssid().isBlank()) continue;
+            if (item.gatewayId() != null && !gatewayId.equals(item.gatewayId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Observation gateway ID mismatch");
+            }
             observations.save(new HotspotObservation(
                     gatewayId, item.ssid().trim(), item.bssid(), item.signalDbm(),
-                    item.frequency(), item.security(), observedAt));
+                    item.frequency(), item.security(), item.observedAt() == null ? observedAt : item.observedAt()));
         }
     }
 
