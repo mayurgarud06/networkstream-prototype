@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from unittest import TestCase, mock
 
@@ -64,6 +65,20 @@ SSID 1 : Test
         with mock.patch.object(agent, "run", return_value=completed):
             with self.assertRaises(RuntimeError):
                 agent.scan_wifi()
+
+    def test_post_json_accepts_json_scan_response(self):
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps({"status": "OK"}).encode("utf-8")
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch.object(agent.urllib.request, "urlopen", return_value=response):
+            result = agent.post_json("http://localhost:8080/api/gateways/GW-1/scan", {"gatewayId": "GW-1"})
+
+        self.assertEqual({"status": "OK"}, result)
+
+    def test_internet_reachable_returns_false_on_timeout(self):
+        with mock.patch.object(agent.urllib.request, "urlopen", side_effect=TimeoutError()):
+            self.assertFalse(agent.internet_reachable())
 
 
 if __name__ == "__main__":
