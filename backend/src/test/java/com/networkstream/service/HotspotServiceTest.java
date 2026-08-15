@@ -29,14 +29,9 @@ class HotspotServiceTest {
     @Test
     void enrollRequiresRegisteredGateway() {
         when(gateways.findById("GW-1")).thenReturn(Optional.empty());
-
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.enroll(request));
-
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
         assertEquals(404, ex.getStatusCode().value());
     }
 
@@ -45,18 +40,15 @@ class HotspotServiceTest {
         Gateway gateway = new Gateway("GW-1");
         AtomicReference<Hotspot> saved = new AtomicReference<>();
         when(gateways.findById("GW-1")).thenReturn(Optional.of(gateway));
+        when(hotspots.findByGatewayIdAndName("GW-1", "MyPhone")).thenReturn(Optional.empty());
         when(hotspots.save(any(Hotspot.class))).thenAnswer(invocation -> {
             Hotspot hotspot = invocation.getArgument(0);
             saved.set(hotspot);
             return hotspot;
         });
-        when(hotspots.findAllByOrderByNameAsc()).thenAnswer(invocation ->
-                saved.get() == null ? java.util.List.of() : java.util.List.of(saved.get()));
 
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 20, 0, "GW-1");
-
+                "MyPhone", "AA-BB-CC-DD-EE-FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
         var result = service.enroll(request);
 
         assertNotNull(saved.get());
@@ -64,19 +56,38 @@ class HotspotServiceTest {
         assertEquals("Test Provider", result.providerName());
         assertEquals("GW-1", result.gatewayId());
         assertEquals("ONLINE", result.status());
+        assertEquals("aa:bb:cc:dd:ee:ff", saved.get().getBssid());
     }
 
     @Test
-    void enrollRejectsInvalidSpeed() {
-        when(gateways.findById("GW-1")).thenReturn(Optional.of(new Gateway("GW-1")));
+    void enrollReturnsExistingHotspotInsteadOfCreatingDuplicate() {
+        Gateway gateway = new Gateway("GW-1");
+        Hotspot existing = new Hotspot(
+                "HS-EXISTING", "MyPhone", "Test Provider", 20.7, 77.0,
+                "ACTIVE", "FREE", 20, 0, "GW-1", "aa:bb:cc:dd:ee:ff");
+        when(gateways.findById("GW-1")).thenReturn(Optional.of(gateway));
+        when(hotspots.findByGatewayIdAndName("GW-1", "MyPhone")).thenReturn(Optional.of(existing));
 
         HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
-                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider",
-                20.7, 77.0, "FREE", 0, 0, "GW-1");
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
+        var result = service.enroll(request);
 
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.enroll(request));
+        assertEquals("HS-EXISTING", result.id());
+    }
 
+    @Test
+    void enrollRejectsInvalidSpeedBeforeGatewayLookup() {
+        HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
+                "MyPhone", "AA:BB:CC:DD:EE:FF", "Test Provider", 20.7, 77.0, "FREE", 0, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
+        assertEquals(400, ex.getStatusCode().value());
+    }
+
+    @Test
+    void enrollRejectsInvalidBssidBeforeGatewayLookup() {
+        HotspotEnrollmentRequest request = new HotspotEnrollmentRequest(
+                "MyPhone", "not-a-mac", "Test Provider", 20.7, 77.0, "FREE", 20, 0, "GW-1");
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.enroll(request));
         assertEquals(400, ex.getStatusCode().value());
     }
 }
