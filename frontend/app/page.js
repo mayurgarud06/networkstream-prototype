@@ -1,116 +1,33 @@
 "use client";
 import {useEffect,useState} from "react";
 const API=process.env.NEXT_PUBLIC_API||"http://localhost:8080";
-
-const emptyGateway={gatewayId:"WIN-LAPTOP-01",hotspotId:"",version:"0.5.0-windows-agent",hostname:"",platform:"Windows"};
+const emptyGateway={gatewayId:"WIN-LAPTOP-01",hotspotId:"",version:"0.6.0-windows-agent",hostname:"",platform:"Windows"};
 const emptyHotspot={ssid:"",bssid:"",providerName:"",latitude:"",longitude:"",accessType:"FREE",speedMbps:"20",priceInr:"0",gatewayId:"WIN-LAPTOP-01"};
-
-function uniqueObserved(items){
- const seen=new Map();
- for(const item of items){
-   const key=(item.bssid||`${item.gatewayId}:${item.ssid}`).toLowerCase();
-   const current=seen.get(key);
-   if(!current || new Date(item.observedAt)>new Date(current.observedAt)) seen.set(key,item);
- }
- return [...seen.values()];
-}
-
+function uniqueObserved(items){const seen=new Map();for(const item of items){const key=(item.bssid||`${item.gatewayId}:${item.ssid}`).toLowerCase();const current=seen.get(key);if(!current||new Date(item.observedAt)>new Date(current.observedAt))seen.set(key,item)}return [...seen.values()]}
+function Signal({percent}){if(percent==null)return <><b>Unavailable</b><small>signal</small></>;return <><b>{percent}%</b><small>Wi-Fi signal</small><progress max="100" value={percent}/></>}
 export default function Home(){
- const [hotspots,setHotspots]=useState([]),[observed,setObserved]=useState([]),[gateways,setGateways]=useState([]),[session,setSession]=useState(null),[tab,setTab]=useState("discover"),[error,setError]=useState(""),[message,setMessage]=useState("");
+ const [hotspots,setHotspots]=useState([]),[observed,setObserved]=useState([]),[gateways,setGateways]=useState([]),[telemetry,setTelemetry]=useState({}),[session,setSession]=useState(null),[tab,setTab]=useState("discover"),[error,setError]=useState(""),[message,setMessage]=useState("");
  const [gatewayForm,setGatewayForm]=useState(emptyGateway),[gateway,setGateway]=useState(null),[hotspotForm,setHotspotForm]=useState(emptyHotspot);
- async function load(){
-   try{
-     const [managed,nearby,registeredGateways]=await Promise.all([
-       fetch(`${API}/api/hotspots`).then(r=>r.json()),
-       fetch(`${API}/api/hotspots/observed?seconds=180`).then(r=>r.json()),
-       fetch(`${API}/api/gateways`).then(r=>r.json())
-     ]);
-     setHotspots(managed); setObserved(uniqueObserved(nearby)); setGateways(registeredGateways);
-   }catch(e){setError(e.message)}
- }
- useEffect(()=>{load(); const timer=setInterval(load,15000); return()=>clearInterval(timer)},[]);
- async function connect(h) {
-   setError("");
-   const response=await fetch(`${API}/api/sessions`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:"DEMO-USER",hotspotId:h.id})});
-   const body=await response.json();
-   if(!response.ok){setError(body.message||"Connection failed");return}
-   setSession(body);
- }
- async function action(path,body){
-   if(!session)return;
-   const response=await fetch(`${API}/api/sessions/${session.id}/${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});
-   const next=await response.json(); if(response.ok)setSession(next); else setError(next.message||"Request failed");
- }
+ async function load(){try{const [managed,nearby,registered]=await Promise.all([fetch(`${API}/api/hotspots`).then(r=>r.json()),fetch(`${API}/api/hotspots/observed?seconds=180`).then(r=>r.json()),fetch(`${API}/api/gateways`).then(r=>r.json())]);setHotspots(managed);setObserved(uniqueObserved(nearby));setGateways(registered);const entries=await Promise.all(registered.map(async g=>{try{return [g.id,await fetch(`${API}/api/gateways/${encodeURIComponent(g.id)}/telemetry`).then(r=>r.ok?r.json():null)]}catch{return [g.id,null]}}));setTelemetry(Object.fromEntries(entries))}catch(e){setError(e.message)}}
+ useEffect(()=>{load();const timer=setInterval(load,10000);return()=>clearInterval(timer)},[]);
+ async function connect(h,client){setError("");const response=await fetch(`${API}/api/sessions`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:"DEMO-USER",hotspotId:h.id,clientIp:client?.ipAddress||null,clientMac:client?.macAddress||null})});const body=await response.json();if(!response.ok){setError(body.message||"Connection failed");return}setSession(body);setMessage(client?`NetworkStream session authorized for ${client.ipAddress}.`:`Session created for ${h.name}.`)}
+ async function action(path,body){if(!session)return;const response=await fetch(`${API}/api/sessions/${session.id}/${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});const next=await response.json();if(response.ok)setSession(next);else setError(next.message||"Request failed")}
  function update(setter){return e=>setter(v=>({...v,[e.target.name]:e.target.value}))}
- async function registerGateway(e){
-   e.preventDefault(); setError(""); setMessage("");
-   try{
-     const r=await fetch(`${API}/api/gateways/${encodeURIComponent(gatewayForm.gatewayId)}/register`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(gatewayForm)});
-     const body=await r.json();
-     if(!r.ok) throw new Error(body.message||"Gateway registration failed");
-     setGateway(body); setHotspotForm(v=>({...v,gatewayId:gatewayForm.gatewayId})); setMessage(`Gateway ${body.id} registered and online.`); load();
-   }catch(e){setError(e.message)}
- }
- function prepareEnrollment(h){
-   setHotspotForm(v=>({...v,ssid:h.ssid,bssid:h.bssid||"",gatewayId:h.gatewayId||gatewayForm.gatewayId}));
-   setMessage(`Prepared ${h.ssid} for enrollment. Confirm provider details before adding it.`);
- }
- async function enrollHotspot(e){
-   e.preventDefault(); setError(""); setMessage("");
-   try{
-     const payload={...hotspotForm,latitude:Number(hotspotForm.latitude||0),longitude:Number(hotspotForm.longitude||0),speedMbps:Number(hotspotForm.speedMbps||0),priceInr:Number(hotspotForm.priceInr||0)};
-     const r=await fetch(`${API}/api/hotspots/enroll`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-     const body=await r.json();
-     if(!r.ok) throw new Error(body.message||"Hotspot enrollment failed");
-     setMessage(`Hotspot ${body.name} enrolled as ${body.id}.`); load();
-   }catch(e){setError(e.message)}
- }
- return <main>
-  <header><div><strong>NetworkStream</strong><small> Connectivity, as a software layer.</small></div>
-   <nav><button onClick={()=>setTab("discover")}>Discover</button><button onClick={()=>setTab("provider")}>Provider</button></nav>
-  </header>
-  <section className="hero"><label>PROTOTYPE · SOFTWARE GATEWAY</label><h1>Explore real nearby Wi-Fi, then connect through NetworkStream.</h1><p>Nearby networks are radio observations from a registered gateway. They are not automatically NetworkStream hotspots.</p></section>
-  {error&&<section className="session"><b>ERROR</b><p>{error}</p></section>}
-  {message&&<section className="session"><b>SUCCESS</b><p>{message}</p></section>}
-  {tab==="discover"?<>
-   <section><h2>NetworkStream hotspots</h2><div className="grid">{hotspots.map(h=><article className="card" key={h.id}>
-    <div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>{h.providerName}</p>
-    <div className="stats"><div><b>{h.speedMbps} Mbps</b><small>advertised</small></div><div><b>{h.priceInr?`₹${h.priceInr}`:"Free"}</b><small>premium</small></div></div>
-    <button disabled={h.status!=="ONLINE"} onClick={()=>connect(h)}>Connect</button>
-   </article>)}</div>{hotspots.length===0&&<p>No managed NetworkStream hotspots are enrolled yet.</p>}</section>
-   <section><h2>Nearby Wi-Fi observed by gateways</h2><p>Real radio observations. Select a network only when you are authorized to enroll it.</p><div className="grid">{observed.length===0?<article className="card"><p>No recent gateway scan. The installed gateway agent should run continuously to keep nearby observations fresh.</p></article>:observed.map((h,i)=><article className="card" key={`${h.bssid||h.ssid}-${i}`}>
-     <div className="meta">RADIO OBSERVATION<span>{h.security||"OPEN"}</span></div><h2>{h.ssid}</h2><p>{h.bssid||"BSSID unavailable"}</p><div className="stats"><div><b>{h.signalDbm??"?"}{h.signalDbm!=null?" dBm":""}</b><small>signal</small></div><div><b>{h.frequency||"?"}</b><small>frequency</small></div></div>
-     <small>Observed by {h.gatewayId} · {new Date(h.observedAt).toLocaleTimeString()}</small><button className="light" onClick={()=>{setTab("provider");prepareEnrollment(h)}}>Enroll this network</button>
-   </article>)}</div></section>
-   {session&&<section className="session"><b>{session.status} · {session.plan}</b><h2>{session.hotspotId}</h2><p>Gateway: {session.gatewayId||"pending"}</p><p>{session.speedMbps} Mbps · {session.usedMb}/{session.quotaMb} MB</p><button onClick={()=>action("usage",{bytesUsed:100*1024*1024})}>Simulate 100 MB (demo only)</button><button className="light" onClick={()=>action("upgrade")}>Upgrade</button><button className="danger" onClick={()=>action("end")}>Disconnect</button></section>}
-  </>:<section>
-    <h2>Provider control plane</h2>
-    <p>Register a gateway first. The gateway agent runs continuously on the gateway machine and reports real nearby Wi-Fi. Then explicitly enroll a hotspot you control.</p>
-    <div className="grid">
-      <article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}>
-        <input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/>
-        <input name="hotspotId" value={gatewayForm.hotspotId} onChange={update(setGatewayForm)} placeholder="Managed hotspot ID (optional)"/>
-        <input name="version" value={gatewayForm.version} onChange={update(setGatewayForm)} placeholder="Agent version" required/>
-        <input name="hostname" value={gatewayForm.hostname} onChange={update(setGatewayForm)} placeholder="Hostname"/>
-        <input name="platform" value={gatewayForm.platform} onChange={update(setGatewayForm)} placeholder="Platform"/>
-        <button type="submit">Register gateway</button>
-      </form>{gateway&&<p>Online: <b>{gateway.id}</b> · {gateway.hostname||"no hostname"}</p>}</article>
-      <article className="card"><h2>Enroll NetworkStream hotspot</h2><form onSubmit={enrollHotspot}>
-        <input name="ssid" value={hotspotForm.ssid} onChange={update(setHotspotForm)} placeholder="SSID" required/>
-        <input name="bssid" value={hotspotForm.bssid} onChange={update(setHotspotForm)} placeholder="BSSID"/>
-        <input name="providerName" value={hotspotForm.providerName} onChange={update(setHotspotForm)} placeholder="Provider name"/>
-        <input name="gatewayId" value={hotspotForm.gatewayId} onChange={update(setHotspotForm)} placeholder="Gateway ID" required/>
-        <input name="latitude" value={hotspotForm.latitude} onChange={update(setHotspotForm)} placeholder="Latitude" inputMode="decimal"/>
-        <input name="longitude" value={hotspotForm.longitude} onChange={update(setHotspotForm)} placeholder="Longitude" inputMode="decimal"/>
-        <input name="speedMbps" value={hotspotForm.speedMbps} onChange={update(setHotspotForm)} placeholder="Speed Mbps" inputMode="numeric" required/>
-        <input name="priceInr" value={hotspotForm.priceInr} onChange={update(setHotspotForm)} placeholder="Price INR" inputMode="numeric" required/>
-        <button type="submit">Enroll hotspot</button>
-      </form></article>
-    </div>
-    <h2>Registered gateways</h2><div className="grid">{gateways.length===0?<article className="card"><p>No gateways registered.</p></article>:gateways.map(g=><article className="card" key={`gateway-${g.id}`}>
-      <div className="meta">● {g.status}<span>{g.platform||"Unknown platform"}</span></div><h2>{g.id}</h2><p>{g.hostname||"Hostname unavailable"}</p><p>Agent: {g.version||"unknown"}</p><p>Last heartbeat: {g.lastHeartbeat?new Date(g.lastHeartbeat).toLocaleString():"never"}</p>
-    </article>)}</div>
-    <h2>Managed NetworkStream hotspots</h2><div className="grid">{hotspots.length===0?<article className="card"><p>No managed hotspots enrolled.</p></article>:hotspots.map(h=><article className="card" key={`provider-${h.id}`}><div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>Gateway: {h.gatewayId||"not assigned"}</p><p>Provider: {h.providerName}</p></article>)}</div>
-  </section>}
+ async function registerGateway(e){e.preventDefault();setError("");setMessage("");try{const r=await fetch(`${API}/api/gateways/${encodeURIComponent(gatewayForm.gatewayId)}/register`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(gatewayForm)});const body=await r.json();if(!r.ok)throw new Error(body.message||"Gateway registration failed");setGateway(body);setHotspotForm(v=>({...v,gatewayId:gatewayForm.gatewayId}));setMessage(`Gateway ${body.id} registered and online.`);load()}catch(e){setError(e.message)}}
+ function prepareEnrollment(h){setHotspotForm(v=>({...v,ssid:h.ssid,bssid:h.bssid||"",gatewayId:h.gatewayId||gatewayForm.gatewayId}));setMessage(`Prepared ${h.ssid} for enrollment.`)}
+ async function enrollHotspot(e){e.preventDefault();setError("");setMessage("");try{const payload={...hotspotForm,latitude:Number(hotspotForm.latitude||0),longitude:Number(hotspotForm.longitude||0),speedMbps:Number(hotspotForm.speedMbps||0),priceInr:Number(hotspotForm.priceInr||0)};const r=await fetch(`${API}/api/hotspots/enroll`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const body=await r.json();if(!r.ok)throw new Error(body.message||"Hotspot enrollment failed");setMessage(`Hotspot ${body.name} enrolled as ${body.id}.`);load()}catch(e){setError(e.message)}}
+ return <main><header><div><strong>NetworkStream</strong><small> Connectivity, as a software layer.</small></div><nav><button onClick={()=>setTab("discover")}>Discover</button><button onClick={()=>setTab("provider")}>Provider</button></nav></header>
+ <section className="hero"><label>PROTOTYPE · REAL GATEWAY</label><h1>Explore real Wi-Fi, enroll authorized hotspots, and control real gateway clients.</h1><p>Radio observations come from the Windows gateway. Client sessions can be enforced through the existing Windows Mobile Hotspot path when the gateway agent runs in data-plane mode.</p></section>
+ {error&&<section className="session"><b>ERROR</b><p>{error}</p></section>}{message&&<section className="session"><b>SUCCESS</b><p>{message}</p></section>}
+ {tab==="discover"?<>
+ <section><h2>NetworkStream hotspots</h2><div className="grid">{hotspots.map(h=><article className="card" key={h.id}><div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>{h.providerName}</p><div className="stats"><div><b>{h.speedMbps} Mbps</b><small>advertised</small></div><div><b>{h.priceInr?`₹${h.priceInr}`:"Free"}</b><small>price</small></div></div><button disabled={h.status!=="ONLINE"} onClick={()=>connect(h)}>Connect demo client</button></article>)}</div>{hotspots.length===0&&<p>No managed NetworkStream hotspots are enrolled yet.</p>}</section>
+ <section><h2>Nearby Wi-Fi observed by gateways</h2><p>Real radio observations. Signal is shown only when the gateway actually reports it.</p><div className="grid">{observed.length===0?<article className="card"><p>No recent gateway scan.</p></article>:observed.map(h=><article className="card" key={h.bssid||`${h.gatewayId}-${h.ssid}`}><div className="meta">RADIO OBSERVATION<span>{h.security||"OPEN"}</span></div><h2>{h.ssid}</h2><p>{h.bssid||"BSSID unavailable"}</p><div className="stats"><div><Signal percent={h.signalPercent}/></div><div><b>{h.frequency||"?"}</b><small>frequency</small></div></div><small>Gateway {h.gatewayId} · channel/frequency reported by Windows · {new Date(h.observedAt).toLocaleTimeString()}</small><button className="light" onClick={()=>{setTab("provider");prepareEnrollment(h)}}>Enroll this network</button></article>)}</div></section>
+ {session&&<section className="session"><b>{session.status} · {session.plan}</b><h2>{session.hotspotId}</h2><p>Gateway: {session.gatewayId} · Client: {session.clientIp||"demo"}</p><p>{session.speedMbps} Mbps · {session.usedMb}/{session.quotaMb} MB</p><button className="danger" onClick={()=>action("end")}>Disconnect / block client</button></section>}
+ </>:<section><h2>Provider control plane</h2><p>Register the real gateway, enroll a hotspot you control, then authorize a detected downstream Phone B client.</p>
+ <div className="grid"><article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}><input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/><input name="hotspotId" value={gatewayForm.hotspotId} onChange={update(setGatewayForm)} placeholder="Managed hotspot ID (optional)"/><input name="version" value={gatewayForm.version} onChange={update(setGatewayForm)} placeholder="Agent version" required/><input name="hostname" value={gatewayForm.hostname} onChange={update(setGatewayForm)} placeholder="Hostname"/><input name="platform" value={gatewayForm.platform} onChange={update(setGatewayForm)} placeholder="Platform"/><button type="submit">Register gateway</button></form>{gateway&&<p>Online: <b>{gateway.id}</b></p>}</article>
+ <article className="card"><h2>Enroll NetworkStream hotspot</h2><form onSubmit={enrollHotspot}><input name="ssid" value={hotspotForm.ssid} onChange={update(setHotspotForm)} placeholder="SSID" required/><input name="bssid" value={hotspotForm.bssid} onChange={update(setHotspotForm)} placeholder="BSSID"/><input name="providerName" value={hotspotForm.providerName} onChange={update(setHotspotForm)} placeholder="Provider name"/><input name="gatewayId" value={hotspotForm.gatewayId} onChange={update(setHotspotForm)} placeholder="Gateway ID" required/><input name="latitude" value={hotspotForm.latitude} onChange={update(setHotspotForm)} placeholder="Latitude"/><input name="longitude" value={hotspotForm.longitude} onChange={update(setHotspotForm)} placeholder="Longitude"/><input name="speedMbps" value={hotspotForm.speedMbps} onChange={update(setHotspotForm)} placeholder="Speed Mbps" required/><input name="priceInr" value={hotspotForm.priceInr} onChange={update(setHotspotForm)} placeholder="Price INR" required/><button type="submit">Enroll hotspot</button></form></article></div>
+ <h2>Gateways & live clients</h2><div className="grid">{gateways.length===0?<article className="card"><p>No gateways registered.</p></article>:gateways.map(g=>{const t=telemetry[g.id];return <article className="card" key={g.id}><div className="meta">● {g.status}<span>{g.platform||"Unknown"}</span></div><h2>{g.id}</h2><p>{g.hostname||"Hostname unavailable"} · Agent {g.version||"unknown"}</p><div className="stats"><div><b>{t?.internetOnline===true?"ONLINE":t?.internetOnline===false?"OFFLINE":"UNKNOWN"}</b><small>gateway Internet</small></div><div><b>{t?.clients?.length??0}</b><small>downstream clients</small></div></div><p>Downstream: {t?.downstreamAddress||"not reported"}</p>{t?.clients?.length? t.clients.map(c=><div className="session" key={c.ipAddress}><b>{c.ipAddress}</b><p>{c.macAddress||"MAC unavailable"}</p><button onClick={()=>{const h=hotspots.find(x=>x.gatewayId===g.id);if(!h){setError("Enroll a managed hotspot on this gateway first.");return}connect(h,c)}}>Authorize Phone B</button></div>):<p>No downstream clients detected. Connect Phone B to the laptop Mobile Hotspot.</p>}</article>})}</div>
+ <h2>Managed NetworkStream hotspots</h2><div className="grid">{hotspots.length===0?<article className="card"><p>No managed hotspots enrolled.</p></article>:hotspots.map(h=><article className="card" key={`provider-${h.id}`}><div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>Gateway: {h.gatewayId||"not assigned"}</p><p>Provider: {h.providerName}</p></article>)}</div>
+ </section>}
  </main>
 }
