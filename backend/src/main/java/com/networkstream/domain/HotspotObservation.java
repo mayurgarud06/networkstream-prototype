@@ -1,0 +1,58 @@
+package com.networkstream.domain;
+
+import jakarta.persistence.*;
+import java.time.Instant;
+
+@Entity
+@Table(name = "hotspot_observations", indexes = {
+        @Index(name = "idx_hotspot_observation_gateway", columnList = "gateway_id"),
+        @Index(name = "idx_hotspot_observation_seen", columnList = "observed_at")
+})
+public class HotspotObservation {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "gateway_id", nullable = false, length = 64)
+    private String gatewayId;
+
+    @Column(nullable = false, length = 160)
+    private String ssid;
+
+    @Column(length = 64)
+    private String bssid;
+
+    @Column(name = "signal_dbm")
+    private Integer signalDbm;
+
+    @Column(length = 32)
+    private String frequency;
+
+    @Column(length = 64)
+    private String security;
+
+    @Column(name = "observed_at", nullable = false)
+    private Instant observedAt = Instant.now();
+
+    protected HotspotObservation() {}
+
+    public HotspotObservation(String gatewayId, String ssid, String bssid, Integer signalDbm,
+                              String frequency, String security, Instant observedAt) {
+        this.gatewayId = gatewayId;
+        this.ssid = ssid;
+        this.bssid = bssid;
+        this.signalDbm = signalDbm;
+        this.frequency = frequency;
+        this.security = security;
+        this.observedAt = observedAt == null ? Instant.now() : observedAt;
+    }
+
+    public Long getId() { return id; }
+    public String getGatewayId() { return gatewayId; }
+    public String getSsid() { return ssid; }
+    public String getBssid() { return bssid; }
+    public Integer getSignalDbm() { return signalDbm; }
+    public String getFrequency() { return frequency; }
+    public String getSecurity() { return security; }
+    public Instant getObservedAt() { return observedAt; }
+}
