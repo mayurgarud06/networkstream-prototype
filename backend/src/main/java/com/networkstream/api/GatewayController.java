@@ -1,8 +1,11 @@
 package com.networkstream.api;
 
+import com.networkstream.domain.Gateway;
 import com.networkstream.service.GatewayService;
 import com.networkstream.service.HotspotObservationService;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/gateways")
@@ -26,6 +29,9 @@ public class GatewayController {
         return service.heartbeat(id, request);
     }
 
+    @GetMapping
+    public List<Gateway> list() { return service.list(); }
+
     @GetMapping("/{id}")
     public Object get(@PathVariable String id) { return service.get(id); }
 
@@ -39,9 +45,9 @@ public class GatewayController {
     }
 
     @PostMapping("/{id}/scan")
-    public String scan(@PathVariable String id, @RequestBody ApiModels.HotspotScanReport report) {
+    public ApiModels.GatewayScanResponse scan(@PathVariable String id, @RequestBody ApiModels.HotspotScanReport report) {
         observations.report(id, report);
-        return "OK";
+        return new ApiModels.GatewayScanResponse("OK");
     }
 
     @GetMapping("/{id}/commands")
