@@ -69,6 +69,47 @@ python .\gateway-agent\networkstream-windows-agent.py `
   --interval 15
 ```
 
+## 6. Explicitly enroll a provider hotspot
+
+Enrollment is deliberately separate from discovery. For the prototype, an
+operator/provider can explicitly enroll a hotspot with the gateway that will
+provide the NetworkStream access path:
+
+```powershell
+$body = @{
+  ssid = "NetworkStream-Lab"
+  bssid = "AA:BB:CC:DD:EE:FF"
+  providerName = "Lab Provider"
+  latitude = 20.705
+  longitude = 77.020
+  accessType = "FREE"
+  speedMbps = 20
+  priceInr = 0
+  gatewayId = "WIN-LAPTOP-01"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost:8080/api/hotspots/enroll `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+**Do not use a random nearby third-party SSID for enrollment.** The endpoint
+is a prototype operator workflow and does not yet implement provider
+authentication/consent. Enrolling a phone's hotspot as a managed hotspot is
+also incorrect if that phone is only being used as the laptop's upstream
+Internet connection.
+
+## 7. Verify the enrolled hotspot
+
+```powershell
+curl http://localhost:8080/api/hotspots
+```
+
+The returned hotspot has a NetworkStream hotspot ID and `gatewayId`. Its
+ONLINE/OFFLINE state is derived from gateway heartbeat when it is gateway-backed.
+
 ## Important enrollment rule
 
 A discovered SSID is **observed**, not automatically a NetworkStream hotspot.
