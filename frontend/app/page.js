@@ -5,16 +5,27 @@ const API=process.env.NEXT_PUBLIC_API||"http://localhost:8080";
 const emptyGateway={gatewayId:"WIN-LAPTOP-01",hotspotId:"",version:"0.5.0-windows-agent",hostname:"",platform:"Windows"};
 const emptyHotspot={ssid:"",bssid:"",providerName:"",latitude:"",longitude:"",accessType:"FREE",speedMbps:"20",priceInr:"0",gatewayId:"WIN-LAPTOP-01"};
 
+function uniqueObserved(items){
+ const seen=new Map();
+ for(const item of items){
+   const key=(item.bssid||`${item.gatewayId}:${item.ssid}`).toLowerCase();
+   const current=seen.get(key);
+   if(!current || new Date(item.observedAt)>new Date(current.observedAt)) seen.set(key,item);
+ }
+ return [...seen.values()];
+}
+
 export default function Home(){
- const [hotspots,setHotspots]=useState([]),[observed,setObserved]=useState([]),[session,setSession]=useState(null),[tab,setTab]=useState("discover"),[error,setError]=useState(""),[message,setMessage]=useState("");
+ const [hotspots,setHotspots]=useState([]),[observed,setObserved]=useState([]),[gateways,setGateways]=useState([]),[session,setSession]=useState(null),[tab,setTab]=useState("discover"),[error,setError]=useState(""),[message,setMessage]=useState("");
  const [gatewayForm,setGatewayForm]=useState(emptyGateway),[gateway,setGateway]=useState(null),[hotspotForm,setHotspotForm]=useState(emptyHotspot);
  async function load(){
    try{
-     const [managed,nearby]=await Promise.all([
+     const [managed,nearby,registeredGateways]=await Promise.all([
        fetch(`${API}/api/hotspots`).then(r=>r.json()),
-       fetch(`${API}/api/hotspots/observed?seconds=180`).then(r=>r.json())
+       fetch(`${API}/api/hotspots/observed?seconds=180`).then(r=>r.json()),
+       fetch(`${API}/api/gateways`).then(r=>r.json())
      ]);
-     setHotspots(managed); setObserved(nearby);
+     setHotspots(managed); setObserved(uniqueObserved(nearby)); setGateways(registeredGateways);
    }catch(e){setError(e.message)}
  }
  useEffect(()=>{load(); const timer=setInterval(load,15000); return()=>clearInterval(timer)},[]);
@@ -66,15 +77,15 @@ export default function Home(){
     <div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>{h.providerName}</p>
     <div className="stats"><div><b>{h.speedMbps} Mbps</b><small>advertised</small></div><div><b>{h.priceInr?`₹${h.priceInr}`:"Free"}</b><small>premium</small></div></div>
     <button disabled={h.status!=="ONLINE"} onClick={()=>connect(h)}>Connect</button>
-   </article>)}</div></section>
-   <section><h2>Nearby Wi-Fi observed by gateways</h2><p>Real radio observations. Select a network only when you are authorized to enroll it.</p><div className="grid">{observed.length===0?<article className="card"><p>No recent gateway scan. Run the Windows or Linux gateway agent.</p></article>:observed.map((h,i)=><article className="card" key={`${h.bssid||h.ssid}-${i}`}>
+   </article>)}</div>{hotspots.length===0&&<p>No managed NetworkStream hotspots are enrolled yet.</p>}</section>
+   <section><h2>Nearby Wi-Fi observed by gateways</h2><p>Real radio observations. Select a network only when you are authorized to enroll it.</p><div className="grid">{observed.length===0?<article className="card"><p>No recent gateway scan. The installed gateway agent should run continuously to keep nearby observations fresh.</p></article>:observed.map((h,i)=><article className="card" key={`${h.bssid||h.ssid}-${i}`}>
      <div className="meta">RADIO OBSERVATION<span>{h.security||"OPEN"}</span></div><h2>{h.ssid}</h2><p>{h.bssid||"BSSID unavailable"}</p><div className="stats"><div><b>{h.signalDbm??"?"}{h.signalDbm!=null?" dBm":""}</b><small>signal</small></div><div><b>{h.frequency||"?"}</b><small>frequency</small></div></div>
      <small>Observed by {h.gatewayId} · {new Date(h.observedAt).toLocaleTimeString()}</small><button className="light" onClick={()=>{setTab("provider");prepareEnrollment(h)}}>Enroll this network</button>
    </article>)}</div></section>
    {session&&<section className="session"><b>{session.status} · {session.plan}</b><h2>{session.hotspotId}</h2><p>Gateway: {session.gatewayId||"pending"}</p><p>{session.speedMbps} Mbps · {session.usedMb}/{session.quotaMb} MB</p><button onClick={()=>action("usage",{bytesUsed:100*1024*1024})}>Simulate 100 MB (demo only)</button><button className="light" onClick={()=>action("upgrade")}>Upgrade</button><button className="danger" onClick={()=>action("end")}>Disconnect</button></section>}
   </>:<section>
     <h2>Provider control plane</h2>
-    <p>Register a gateway first. Then explicitly enroll a hotspot you control. Discovery alone never claims a third-party network.</p>
+    <p>Register a gateway first. The gateway agent runs continuously on the gateway machine and reports real nearby Wi-Fi. Then explicitly enroll a hotspot you control.</p>
     <div className="grid">
       <article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}>
         <input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/>
@@ -96,7 +107,10 @@ export default function Home(){
         <button type="submit">Enroll hotspot</button>
       </form></article>
     </div>
-    <h2>Current managed gateways</h2><div className="grid">{hotspots.map(h=><article className="card" key={`provider-${h.id}`}><div className="meta">● {h.status}</div><h2>{h.name}</h2><p>Gateway: {h.gatewayId||"not assigned"}</p><p>Provider: {h.providerName}</p></article>)}</div>
+    <h2>Registered gateways</h2><div className="grid">{gateways.length===0?<article className="card"><p>No gateways registered.</p></article>:gateways.map(g=><article className="card" key={`gateway-${g.id}`}>
+      <div className="meta">● {g.status}<span>{g.platform||"Unknown platform"}</span></div><h2>{g.id}</h2><p>{g.hostname||"Hostname unavailable"}</p><p>Agent: {g.version||"unknown"}</p><p>Last heartbeat: {g.lastHeartbeat?new Date(g.lastHeartbeat).toLocaleString():"never"}</p>
+    </article>)}</div>
+    <h2>Managed NetworkStream hotspots</h2><div className="grid">{hotspots.length===0?<article className="card"><p>No managed hotspots enrolled.</p></article>:hotspots.map(h=><article className="card" key={`provider-${h.id}`}><div className="meta">● {h.status}<span>{h.accessType}</span></div><h2>{h.name}</h2><p>Gateway: {h.gatewayId||"not assigned"}</p><p>Provider: {h.providerName}</p></article>)}</div>
   </section>}
  </main>
 }
