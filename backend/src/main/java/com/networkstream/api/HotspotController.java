@@ -20,4 +20,9 @@ public class HotspotController {
     public List<ApiModels.Hotspot> list() {
         return service.list();
     }
+
+    @PostMapping("/enroll")
+    public ApiModels.Hotspot enroll(@RequestBody HotspotEnrollmentRequest request) {
+        return service.enroll(request);
+    }
 }
