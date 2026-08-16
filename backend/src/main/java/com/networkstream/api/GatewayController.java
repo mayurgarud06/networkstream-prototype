@@ -34,7 +34,10 @@ public class GatewayController {
     public ApiModels.GatewayPolicy policy(@PathVariable String id) { return service.policy(id); }
 
     @PostMapping("/{id}/usage")
-    public String usage(@PathVariable String id, @RequestBody ApiModels.UsageReport report) { service.reportUsage(id, report); return "OK"; }
+    public ApiModels.OperationResponse usage(@PathVariable String id, @RequestBody ApiModels.UsageReport report) {
+        service.reportUsage(id, report);
+        return new ApiModels.OperationResponse("OK");
+    }
 
     @PostMapping("/{id}/scan")
     public ApiModels.GatewayScanResponse scan(@PathVariable String id, @RequestBody ApiModels.HotspotScanReport report) {
@@ -51,15 +54,15 @@ public class GatewayController {
     }
 
     @PostMapping("/{id}/commands/{commandId}/ack")
-    public String acknowledgeCommand(@PathVariable String id, @PathVariable Long commandId) {
+    public ApiModels.OperationResponse acknowledgeCommand(@PathVariable String id, @PathVariable Long commandId) {
         service.acknowledgeCommand(id, commandId);
-        return "OK";
+        return new ApiModels.OperationResponse("OK");
     }
 
     @PostMapping("/{id}/telemetry")
-    public String telemetry(@PathVariable String id, @RequestBody ApiModels.GatewayTelemetry report) {
+    public ApiModels.OperationResponse telemetry(@PathVariable String id, @RequestBody ApiModels.GatewayTelemetry report) {
         service.reportTelemetry(id, report);
-        return "OK";
+        return new ApiModels.OperationResponse("OK");
     }
 
     @GetMapping("/{id}/telemetry")
