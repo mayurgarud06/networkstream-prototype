@@ -32,7 +32,12 @@ def run(cmd):
 
 def post_json(url, payload):
     data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(request, timeout=8) as response:
         body = response.read().decode("utf-8")
         return json.loads(body) if body else None
@@ -98,7 +103,14 @@ def scan_wifi():
         match = re.match(r"BSSID\s+\d+\s*:\s*([0-9a-fA-F:-]+)", line, re.I)
         if match and current_ssid is not None:
             security = current_auth if not current_encryption or current_encryption.lower() == "none" else f"{current_auth}/{current_encryption}"
-            current = {"ssid": current_ssid, "bssid": match.group(1).lower(), "signalDbm": None, "signalPercent": None, "frequency": None, "security": security}
+            current = {
+                "ssid": current_ssid,
+                "bssid": match.group(1).lower(),
+                "signalDbm": None,
+                "signalPercent": None,
+                "frequency": None,
+                "security": security,
+            }
             networks.append(current)
             continue
         if current is None:
@@ -121,8 +133,20 @@ def discover_clients():
     clients = []
     for line in result.stdout.splitlines():
         match = re.search(r"^\s*(192\.168\.137\.\d+)\s+([0-9a-fA-F-]{17})\s+\w+", line)
-        if match and match.group(1) != "192.168.137.1":
-            clients.append({"ipAddress": match.group(1), "macAddress": match.group(2).lower().replace("-", ":"), "hostname": None})
+        if not match:
+            continue
+        ip = match.group(1)
+        last_octet = int(ip.rsplit(".", 1)[1])
+        # Only real Windows Mobile Hotspot client addresses are controllable.
+        # Exclude the gateway (.1), network/broadcast addresses and any value
+        # outside the usable /24 host range so firewall validation cannot be
+        # tripped by ARP's broadcast entry.
+        if 2 <= last_octet <= 254:
+            clients.append({
+                "ipAddress": ip,
+                "macAddress": match.group(2).lower().replace("-", ":"),
+                "hostname": None,
+            })
     return list({client["ipAddress"]: client for client in clients}.values())
 
 
@@ -234,6 +258,14 @@ def start_client_endpoint(port):
     return server
 
 
+def cleanup_firewall(managed_ips):
+    for ip in sorted(managed_ips):
+        try:
+            apply_firewall(ip, True)
+        except Exception as error:
+            print("firewall cleanup failed:", ip, error)
+
+
 def main():
     parser = argparse.ArgumentParser(description="NetworkStream Windows gateway agent")
     parser.add_argument("--api", default="http://127.0.0.1:8080")
@@ -248,6 +280,7 @@ def main():
 
     scan_enabled = not args.no_scan
     authorized_ips = set()
+    managed_ips = set()
     print("NetworkStream Windows Gateway Agent", VERSION)
     print("gateway:", args.gateway_id)
     print("host:", socket.gethostname())
@@ -259,44 +292,45 @@ def main():
     portal = start_client_endpoint(args.portal_port)
     try:
         print("register:", register(args.api, args.gateway_id, args.hotspot_id))
-    except Exception as error:
-        print("registration failed:", error)
+        while True:
+            try:
+                print("heartbeat:", heartbeat(args.api, args.gateway_id))
+                online = internet_reachable()
+                print("internet:", "ONLINE" if online else "OFFLINE")
+                networks = scan_wifi() if scan_enabled else []
+                if scan_enabled:
+                    print(f"nearby Wi-Fi networks: {len(networks)}")
+                    print("scan report:", report_scan(args.api, args.gateway_id, networks))
+
+                clients = discover_clients()
+                managed_ips.update(client["ipAddress"] for client in clients)
+                print("downstream clients:", clients)
+                print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online))
+
+                if args.data_plane:
+                    process_commands(args.api, args.gateway_id, authorized_ips)
+                    for client in clients:
+                        ip = client["ipAddress"]
+                        if ip in authorized_ips:
+                            apply_firewall(ip, True)
+                        else:
+                            apply_firewall(ip, False)
+                    print("authorized clients:", sorted(authorized_ips))
+
+                print("policy:", json.dumps(get_policy(args.api, args.gateway_id), indent=2))
+                print("commands:", json.dumps(get_commands(args.api, args.gateway_id), indent=2))
+            except Exception as error:
+                print("gateway communication failed:", error)
+
+            if args.once:
+                break
+            time.sleep(max(5, args.interval))
+    except KeyboardInterrupt:
+        print("stopping Windows gateway agent")
+    finally:
+        if args.data_plane:
+            cleanup_firewall(managed_ips)
         portal.shutdown()
-        return 1
-
-    while True:
-        try:
-            print("heartbeat:", heartbeat(args.api, args.gateway_id))
-            online = internet_reachable()
-            print("internet:", "ONLINE" if online else "OFFLINE")
-            networks = scan_wifi() if scan_enabled else []
-            if scan_enabled:
-                print(f"nearby Wi-Fi networks: {len(networks)}")
-                print("scan report:", report_scan(args.api, args.gateway_id, networks))
-
-            clients = discover_clients()
-            print("downstream clients:", clients)
-            print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online))
-
-            if args.data_plane:
-                process_commands(args.api, args.gateway_id, authorized_ips)
-                for client in clients:
-                    if client["ipAddress"] in authorized_ips:
-                        apply_firewall(client["ipAddress"], True)
-                    else:
-                        apply_firewall(client["ipAddress"], False)
-                print("authorized clients:", sorted(authorized_ips))
-
-            print("policy:", json.dumps(get_policy(args.api, args.gateway_id), indent=2))
-            print("commands:", json.dumps(get_commands(args.api, args.gateway_id), indent=2))
-        except Exception as error:
-            print("gateway communication failed:", error)
-
-        if args.once:
-            break
-        time.sleep(max(5, args.interval))
-
-    portal.shutdown()
     return 0
 
 
