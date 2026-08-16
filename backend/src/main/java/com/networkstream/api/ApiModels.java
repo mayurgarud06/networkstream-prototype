@@ -42,7 +42,7 @@ public final class ApiModels {
     }
 
     public record GatewayTelemetry(String gatewayId, Instant observedAt, boolean internetOnline,
-                                   String upstreamInterface, String upstreamAddress,
+                                   String upstreamInterface, String upstreamAddress, String upstreamSsid,
                                    String downstreamInterface, String downstreamAddress,
                                    String downstreamSsid, List<GatewayClient> clients) {}
 
