@@ -4,9 +4,6 @@
 Safe by default: scans Wi-Fi, reports gateway/client telemetry and keeps the
 control-plane alive. With --data-plane it blocks every newly discovered
 Windows Mobile Hotspot client until NetworkStream authorizes that client.
-
-The local client endpoint lets the NetworkStream frontend identify the Phone B
-source address without giving the browser direct access to the cloud API.
 """
 import argparse
 import json
@@ -32,12 +29,7 @@ def run(cmd):
 
 def post_json(url, payload):
     data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
+    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
     with urllib.request.urlopen(request, timeout=8) as response:
         body = response.read().decode("utf-8")
         return json.loads(body) if body else None
@@ -103,14 +95,7 @@ def scan_wifi():
         match = re.match(r"BSSID\s+\d+\s*:\s*([0-9a-fA-F:-]+)", line, re.I)
         if match and current_ssid is not None:
             security = current_auth if not current_encryption or current_encryption.lower() == "none" else f"{current_auth}/{current_encryption}"
-            current = {
-                "ssid": current_ssid,
-                "bssid": match.group(1).lower(),
-                "signalDbm": None,
-                "signalPercent": None,
-                "frequency": None,
-                "security": security,
-            }
+            current = {"ssid": current_ssid, "bssid": match.group(1).lower(), "signalDbm": None, "signalPercent": None, "frequency": None, "security": security}
             networks.append(current)
             continue
         if current is None:
@@ -137,16 +122,8 @@ def discover_clients():
             continue
         ip = match.group(1)
         last_octet = int(ip.rsplit(".", 1)[1])
-        # Only real Windows Mobile Hotspot client addresses are controllable.
-        # Exclude the gateway (.1), network/broadcast addresses and any value
-        # outside the usable /24 host range so firewall validation cannot be
-        # tripped by ARP's broadcast entry.
         if 2 <= last_octet <= 254:
-            clients.append({
-                "ipAddress": ip,
-                "macAddress": match.group(2).lower().replace("-", ":"),
-                "hostname": None,
-            })
+            clients.append({"ipAddress": ip, "macAddress": match.group(2).lower().replace("-", ":"), "hostname": None})
     return list({client["ipAddress"]: client for client in clients}.values())
 
 
@@ -162,24 +139,29 @@ def firewall_rule_names(ip):
 
 
 def apply_firewall(ip, allow):
-    """Block client-originated traffic while leaving the local portal reachable."""
     validate_client_ip(ip)
     block_name, portal_name = firewall_rule_names(ip)
     remove = f"Remove-NetFirewallRule -DisplayName '{block_name}' -ErrorAction SilentlyContinue; Remove-NetFirewallRule -DisplayName '{portal_name}' -ErrorAction SilentlyContinue"
     run(["powershell", "-NoProfile", "-Command", remove])
     if allow:
         return
-
     command = (
-        f"New-NetFirewallRule -DisplayName '{block_name}' -Direction Inbound "
-        f"-RemoteAddress {ip} -Action Block -Profile Any; "
-        f"New-NetFirewallRule -DisplayName '{portal_name}' -Direction Inbound "
-        f"-RemoteAddress {ip} -Protocol TCP -LocalPort 3000,8081 "
-        f"-Action Allow -Profile Any -OverrideBlockRules True"
+        f"New-NetFirewallRule -DisplayName '{block_name}' -Direction Inbound -RemoteAddress {ip} -Action Block -Profile Any; "
+        f"New-NetFirewallRule -DisplayName '{portal_name}' -Direction Inbound -RemoteAddress {ip} -Protocol TCP -LocalPort 3000,8081 -Action Allow -Profile Any -OverrideBlockRules True"
     )
     result = run(["powershell", "-NoProfile", "-Command", command])
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Windows Firewall update failed; run the agent elevated")
+
+
+def downstream_ssid():
+    result = run(["netsh", "wlan", "show", "hostednetwork"])
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            match = re.search(r"SSID name\s*:\s*(.*)$", line, re.I)
+            if match and match.group(1).strip():
+                return match.group(1).strip()
+    return "Windows Mobile Hotspot"
 
 
 def register(api, gateway_id, hotspot_id=None):
@@ -192,12 +174,13 @@ def heartbeat(api, gateway_id):
 
 def report_scan(api, gateway_id, networks):
     observed_at = datetime.now(timezone.utc).isoformat()
-    payload = {"gatewayId": gateway_id, "observedAt": observed_at, "hotspots": [{"gatewayId": gateway_id, "ssid": network["ssid"], "bssid": network["bssid"], "signalDbm": network.get("signalDbm"), "signalPercent": network.get("signalPercent"), "frequency": network.get("frequency"), "security": network.get("security", "OPEN"), "observedAt": observed_at} for network in networks]}
+    payload = {"gatewayId": gateway_id, "observedAt": observed_at, "hotspots": [{"gatewayId": gateway_id, "ssid": n["ssid"], "bssid": n["bssid"], "signalDbm": n.get("signalDbm"), "signalPercent": n.get("signalPercent"), "frequency": n.get("frequency"), "security": n.get("security", "OPEN"), "observedAt": observed_at} for n in networks]}
     return post_json(f"{api}/api/gateways/{gateway_id}/scan", payload)
 
 
-def report_telemetry(api, gateway_id, clients, internet_online):
-    payload = {"gatewayId": gateway_id, "observedAt": datetime.now(timezone.utc).isoformat(), "internetOnline": internet_online, "upstreamInterface": "Wi-Fi", "upstreamAddress": None, "downstreamInterface": "Windows Mobile Hotspot", "downstreamAddress": "192.168.137.1", "clients": clients}
+def report_telemetry(api, gateway_id, clients, internet_online, downstream_name, authorized_ips):
+    enriched = [dict(client, authorized=client["ipAddress"] in authorized_ips) for client in clients]
+    payload = {"gatewayId": gateway_id, "observedAt": datetime.now(timezone.utc).isoformat(), "internetOnline": internet_online, "upstreamInterface": "Wi-Fi", "upstreamAddress": None, "downstreamInterface": "Windows Mobile Hotspot", "downstreamAddress": "192.168.137.1", "downstreamSsid": downstream_name, "clients": enriched}
     return post_json(f"{api}/api/gateways/{gateway_id}/telemetry", payload)
 
 
@@ -238,10 +221,7 @@ def start_client_endpoint(port):
                 self.send_response(404)
                 self.end_headers()
                 return
-            if self.path == "/health":
-                body = b'{"status":"OK"}'
-            else:
-                body = json.dumps({"clientIp": self.client_address[0], "gatewayAddress": "192.168.137.1", "frontendPort": 3000}).encode("utf-8")
+            body = b'{"status":"OK"}' if self.path == "/health" else json.dumps({"clientIp": self.client_address[0], "gatewayAddress": "192.168.137.1", "frontendPort": 3000}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -274,7 +254,7 @@ def main():
     parser.add_argument("--no-scan", action="store_true")
     parser.add_argument("--data-plane", action="store_true")
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--interval", type=int, default=15)
+    parser.add_argument("--interval", type=float, default=1.0, help="gateway control loop interval in seconds")
     parser.add_argument("--portal-port", type=int, default=8081)
     args = parser.parse_args()
 
@@ -297,26 +277,24 @@ def main():
                 print("heartbeat:", heartbeat(args.api, args.gateway_id))
                 online = internet_reachable()
                 print("internet:", "ONLINE" if online else "OFFLINE")
-                networks = scan_wifi() if scan_enabled else []
-                if scan_enabled:
-                    print(f"nearby Wi-Fi networks: {len(networks)}")
-                    print("scan report:", report_scan(args.api, args.gateway_id, networks))
-
                 clients = discover_clients()
                 managed_ips.update(client["ipAddress"] for client in clients)
-                print("downstream clients:", clients)
-                print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online))
+                downstream_name = downstream_ssid()
 
                 if args.data_plane:
                     process_commands(args.api, args.gateway_id, authorized_ips)
                     for client in clients:
                         ip = client["ipAddress"]
-                        if ip in authorized_ips:
-                            apply_firewall(ip, True)
-                        else:
-                            apply_firewall(ip, False)
-                    print("authorized clients:", sorted(authorized_ips))
+                        apply_firewall(ip, ip in authorized_ips)
 
+                if scan_enabled:
+                    networks = scan_wifi()
+                    print(f"nearby Wi-Fi networks: {len(networks)}")
+                    print("scan report:", report_scan(args.api, args.gateway_id, networks))
+
+                print("downstream clients:", clients)
+                print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online, downstream_name, authorized_ips))
+                print("authorized clients:", sorted(authorized_ips))
                 print("policy:", json.dumps(get_policy(args.api, args.gateway_id), indent=2))
                 print("commands:", json.dumps(get_commands(args.api, args.gateway_id), indent=2))
             except Exception as error:
@@ -324,7 +302,7 @@ def main():
 
             if args.once:
                 break
-            time.sleep(max(5, args.interval))
+            time.sleep(max(0.25, args.interval))
     except KeyboardInterrupt:
         print("stopping Windows gateway agent")
     finally:
