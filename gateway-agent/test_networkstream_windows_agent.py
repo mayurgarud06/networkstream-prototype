@@ -9,8 +9,8 @@ agent = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent)
 
 
-class WindowsWifiScanTests(TestCase):
-    def test_scan_wifi_parses_real_netsh_shape(self):
+class WindowsGatewayTests(TestCase):
+    def test_scan_parses_real_netsh_shape(self):
         output = """
 SSID 1 : NS-UPLINK-A
     Network type : Infrastructure
@@ -30,7 +30,7 @@ SSID 2 : NS-TEST-B
 """
         completed = mock.Mock(returncode=0, stdout=output, stderr="")
         with mock.patch.object(agent, "run", return_value=completed):
-            networks = agent.scan_wifi()
+            networks = agent.scan()
         self.assertEqual(2, len(networks))
         self.assertEqual("NS-UPLINK-A", networks[0]["ssid"])
         self.assertEqual("aa:bb:cc:dd:ee:01", networks[0]["bssid"])
@@ -40,7 +40,7 @@ SSID 2 : NS-TEST-B
         self.assertIn("WPA2-Personal", networks[0]["security"])
         self.assertEqual("5180 MHz", networks[1]["frequency"])
 
-    def test_scan_wifi_does_not_report_percentage_as_dbm(self):
+    def test_scan_does_not_report_percentage_as_dbm(self):
         output = """SSID 1 : Test
     BSSID 1 : AA:BB:CC:DD:EE:FF
          Signal : 90%
@@ -48,11 +48,11 @@ SSID 2 : NS-TEST-B
 """
         completed = mock.Mock(returncode=0, stdout=output, stderr="")
         with mock.patch.object(agent, "run", return_value=completed):
-            network = agent.scan_wifi()[0]
+            network = agent.scan()[0]
         self.assertEqual(90, network["signalPercent"])
         self.assertIsNone(network["signalDbm"])
 
-    def test_discover_clients_filters_to_usable_mobile_hotspot_hosts(self):
+    def test_clients_filters_to_mobile_hotspot_hosts(self):
         output = """Interface: 192.168.137.1 --- 0xb
   Internet Address      Physical Address      Type
   192.168.137.1         00-11-22-33-44-55     dynamic
@@ -62,38 +62,56 @@ SSID 2 : NS-TEST-B
 """
         completed = mock.Mock(returncode=0, stdout=output, stderr="")
         with mock.patch.object(agent, "run", return_value=completed):
-            clients = agent.discover_clients()
+            found = agent.clients()
         self.assertEqual(
             [{"ipAddress": "192.168.137.23", "macAddress": "aa:bb:cc:dd:ee:ff", "hostname": None}],
-            clients,
+            found,
         )
 
-    def test_firewall_rejects_non_downstream_address(self):
+    def test_valid_client_rejects_non_downstream_address(self):
         with self.assertRaises(ValueError):
-            agent.apply_firewall("192.168.42.10", True)
+            agent.valid_client("192.168.42.10")
 
-    def test_firewall_rejects_broadcast_address(self):
+    def test_valid_client_rejects_broadcast_address(self):
         with self.assertRaises(ValueError):
-            agent.apply_firewall("192.168.137.255", False)
+            agent.valid_client("192.168.137.255")
 
-    def test_scan_wifi_raises_when_netsh_fails(self):
-        completed = mock.Mock(returncode=1, stdout="", stderr="WLAN AutoConfig service is not running")
-        with mock.patch.object(agent, "run", return_value=completed):
-            with self.assertRaises(RuntimeError):
-                agent.scan_wifi()
+    def test_new_client_is_denied_by_default(self):
+        state = agent.TrafficState()
+        self.assertFalse(state.is_authorized("192.168.137.23"))
 
-    def test_post_json_accepts_json_scan_response(self):
+    def test_allow_and_block_change_policy_without_firewall_rules(self):
+        state = agent.TrafficState()
+        ip = "192.168.137.23"
+        state.set_authorized(ip, True)
+        self.assertTrue(state.is_authorized(ip))
+        state.set_authorized(ip, False)
+        self.assertFalse(state.is_authorized(ip))
+
+    def test_traffic_counters_distinguish_forwarded_and_dropped_packets(self):
+        state = agent.TrafficState()
+        ip = "192.168.137.23"
+        state.record(ip, False, 100)
+        state.record(ip, True, 250)
+        snapshot = state.snapshot_traffic(ip)
+        self.assertEqual(1, snapshot["droppedPackets"])
+        self.assertEqual(100, snapshot["droppedBytes"])
+        self.assertEqual(1, snapshot["forwardedPackets"])
+        self.assertEqual(250, snapshot["forwardedBytes"])
+        self.assertIsNotNone(snapshot["lastTrafficAt"])
+
+    def test_post_accepts_json_response(self):
         response = mock.MagicMock()
         response.read.return_value = json.dumps({"status": "OK"}).encode("utf-8")
         response.__enter__.return_value = response
         response.__exit__.return_value = False
         with mock.patch.object(agent.urllib.request, "urlopen", return_value=response):
-            result = agent.post_json("http://localhost:8080/api/gateways/GW-1/scan", {"gatewayId": "GW-1"})
+            result = agent.post("http://localhost:8080/api/gateways/GW-1/scan", {"gatewayId": "GW-1"})
         self.assertEqual({"status": "OK"}, result)
 
-    def test_internet_reachable_returns_false_on_timeout(self):
+    def test_online_returns_false_on_timeout(self):
         with mock.patch.object(agent.urllib.request, "urlopen", side_effect=TimeoutError()):
-            self.assertFalse(agent.internet_reachable())
+            self.assertFalse(agent.online())
 
 
 if __name__ == "__main__":
