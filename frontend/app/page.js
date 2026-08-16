@@ -129,6 +129,25 @@ export default function Home() {
     } catch (e) { setError(e.message); }
   }
 
+  async function gatewayClientAction(gatewayId, selectedClient, type) {
+    if (!selectedClient?.ipAddress) return;
+    setError("");
+    try {
+      await json(`${API}/gateways/${encodeURIComponent(gatewayId)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: "0",
+          type,
+          sessionId: null,
+          value: selectedClient.ipAddress,
+        }),
+      });
+      setMessage(`${type === "ALLOW_CLIENT" ? "Allow" : "Block"} command queued for ${selectedClient.ipAddress}. The Windows gateway will apply it on the next command cycle.`);
+      await load();
+    } catch (e) { setError(e.message); }
+  }
+
   async function sessionAction(path) {
     if (!session) return;
     try {
@@ -232,7 +251,7 @@ export default function Home() {
 
         {session && <section className="session"><div><StatusPill good={session.status === "ACTIVE"}>{session.status}</StatusPill><h2>Active session</h2><p>{session.hotspotId} · Gateway {session.gatewayId}</p></div><div className="session-grid"><div><small>Client</small><b>{session.clientIp || "not attached"}</b></div><div><small>Plan</small><b>{session.plan}</b></div><div><small>Usage</small><b>{session.usedMb}/{session.quotaMb} MB</b></div><div><small>Speed</small><b>{session.speedMbps} Mbps</b></div></div><button className="danger" onClick={() => sessionAction("end")}>Disconnect / block client</button></section>}
       </> : <section>
-        <div className="section-head"><div><h2>Gateway control room</h2><p>Register the edge, inspect radio/client telemetry, and enroll only networks you control.</p></div><StatusPill good>{onlineGateways} ONLINE</StatusPill></div>
+        <div className="section-head"><div><h2>Gateway control room</h2><p>Register the edge, inspect radio/client telemetry, and control real downstream clients.</p></div><StatusPill good>{onlineGateways} ONLINE</StatusPill></div>
         <div className="grid">
           <article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}><input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/><input name="hotspotId" value={gatewayForm.hotspotId} onChange={update(setGatewayForm)} placeholder="Managed hotspot ID (optional)"/><input name="version" value={gatewayForm.version} onChange={update(setGatewayForm)} placeholder="Agent version" required/><input name="hostname" value={gatewayForm.hostname} onChange={update(setGatewayForm)} placeholder="Hostname"/><button type="submit">Register gateway</button></form>{gateway && <p className="success-text">Registered: <b>{gateway.id}</b></p>}</article>
           <article className="card"><h2>Enroll hotspot</h2><form onSubmit={enrollHotspot}><input name="ssid" value={hotspotForm.ssid} onChange={update(setHotspotForm)} placeholder="SSID" required/><input name="bssid" value={hotspotForm.bssid} onChange={update(setHotspotForm)} placeholder="BSSID"/><input name="providerName" value={hotspotForm.providerName} onChange={update(setHotspotForm)} placeholder="Provider name"/><input name="gatewayId" value={hotspotForm.gatewayId} onChange={update(setHotspotForm)} placeholder="Gateway ID" required/><div className="two"><input name="latitude" value={hotspotForm.latitude} onChange={update(setHotspotForm)} placeholder="Latitude"/><input name="longitude" value={hotspotForm.longitude} onChange={update(setHotspotForm)} placeholder="Longitude"/></div><div className="two"><input name="speedMbps" value={hotspotForm.speedMbps} onChange={update(setHotspotForm)} placeholder="Speed Mbps" required/><input name="priceInr" value={hotspotForm.priceInr} onChange={update(setHotspotForm)} placeholder="Price INR" required/></div><button type="submit">Enroll hotspot</button></form></article>
@@ -242,7 +261,13 @@ export default function Home() {
           <div className="meta"><StatusPill good={g.status === "ONLINE"}>{g.status}</StatusPill><span>{g.platform || "Unknown"}</span></div><h2>{g.id}</h2><p>{g.hostname || "Hostname unavailable"} · Agent {g.version || "unknown"}</p>
           <div className="stats"><div><b>{t?.internetOnline === true ? "ONLINE" : t?.internetOnline === false ? "OFFLINE" : "UNKNOWN"}</b><small>upstream Internet</small></div><div><b>{t?.clients?.length ?? 0}</b><small>downstream clients</small></div></div>
           <p>Downstream: {t?.downstreamAddress || "not reported"}</p>
-          {t?.clients?.length ? t.clients.map((c) => <div className="client-row" key={c.ipAddress}><div><b>{c.ipAddress}</b><small>{c.macAddress || "MAC unavailable"}</small></div><button onClick={() => { const h = hotspots.find((x) => x.gatewayId === g.id); if (h) connect(h, c); else setError("Enroll a managed hotspot on this gateway first."); }}>Authorize Phone B</button></div>) : <p>No downstream clients detected. Connect Phone B to the Windows Mobile Hotspot.</p>}
+          {t?.clients?.length ? t.clients.map((c) => <div className="client-row" key={c.ipAddress}>
+            <div><b>{c.ipAddress}</b><small>{c.macAddress || "MAC unavailable"}</small></div>
+            <div className="client-actions">
+              <button onClick={() => gatewayClientAction(g.id, c, "ALLOW_CLIENT")}>Allow Phone B</button>
+              <button className="danger" onClick={() => gatewayClientAction(g.id, c, "BLOCK_CLIENT")}>Block Phone B</button>
+            </div>
+          </div>) : <p>No downstream clients detected. Connect Phone B to the Windows Mobile Hotspot.</p>}
         </article>; })}</div>
       </section>}
 
