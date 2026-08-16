@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const API = "/api/backend";
+const API = "/api";
 
 const emptyGateway = {
   gatewayId: "WIN-LAPTOP-01",
