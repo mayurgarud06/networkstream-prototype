@@ -34,17 +34,17 @@ export default function Home() {
     } catch (e) { setError(e.message); }
   }
 
-  useEffect(() => { load(); const timer = setInterval(load, 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
 
   async function waitForActualState(gatewayId, ip, desired) {
     const started = Date.now();
-    while (Date.now() - started < 4000) {
+    while (Date.now() - started < 4500) {
       try {
         const t = await json(`${API}/gateways/${encodeURIComponent(gatewayId)}/telemetry`);
         const c = (t?.clients || []).find(x => x.ipAddress === ip);
         if (c && c.authorized === desired) { setTelemetry(v => ({ ...v, [gatewayId]: t })); return c; }
       } catch {}
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
     return null;
   }
@@ -55,24 +55,45 @@ export default function Home() {
     const allow = !clientInfo.authorized;
     setError(""); setMessage(""); setPending(v => ({ ...v, [key]: true }));
     try {
-      await json(`${API}/gateways/${encodeURIComponent(gatewayId)}/commands`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: "0", type: allow ? "ALLOW_CLIENT" : "BLOCK_CLIENT", sessionId: null, value: clientInfo.ipAddress }),
-      });
+      await json(`${API}/gateways/${encodeURIComponent(gatewayId)}/commands`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: "0", type: allow ? "ALLOW_CLIENT" : "BLOCK_CLIENT", sessionId: null, value: clientInfo.ipAddress }) });
       const actual = await waitForActualState(gatewayId, clientInfo.ipAddress, allow);
-      if (!actual) throw new Error(`Gateway did not confirm ${allow ? "ALLOW" : "BLOCK"} for ${clientInfo.ipAddress} within 4 seconds.`);
-      setMessage(`${actual.internetStatus === "FLOWING" ? "Internet is flowing" : allow ? "Internet access allowed" : "Internet blocked"} for ${clientInfo.ipAddress}.`);
+      if (!actual) throw new Error(`Gateway did not confirm ${allow ? "ALLOW" : "BLOCK"} for ${clientInfo.ipAddress}.`);
+      setMessage(actual.internetStatus === "FLOWING" ? `Internet is flowing for ${clientInfo.ipAddress}.` : allow ? `Internet access allowed for ${clientInfo.ipAddress}.` : `Internet blocked for ${clientInfo.ipAddress}.`);
       await load();
     } catch (e) { setError(e.message); }
     finally { setPending(v => { const next = { ...v }; delete next[key]; return next; }); }
   }
 
-  async function connect(h, selectedClient = client) { try { const body = await json(`${API}/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: "PHONE-B-USER", hotspotId: h.id, clientIp: selectedClient?.clientIp || null, clientMac: selectedClient?.macAddress || null }) }); setSession(body); setMessage(body.clientIp ? `Authorization requested for ${body.clientIp}.` : `Session created for ${h.name}.`); } catch (e) { setError(e.message); } }
+  async function connect(h, selectedClient = client) {
+    setError("");
+    try {
+      const body = await json(`${API}/sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: "PHONE-B-USER", hotspotId: h.id, clientIp: selectedClient?.clientIp || selectedClient?.ipAddress || null, clientMac: selectedClient?.macAddress || null }) });
+      setSession(body); setMessage(body.clientIp ? `Authorization requested for ${body.clientIp}.` : `Session created for ${h.name}.`); await load();
+    } catch (e) { setError(e.message); }
+  }
+
   async function sessionAction(path) { if (!session) return; try { const next = await json(`${API}/sessions/${session.id}/${path}`, { method: "POST" }); setSession(next); setMessage(path === "end" ? "Client blocked again." : `Session ${path} completed.`); await load(); } catch (e) { setError(e.message); } }
   function update(setter) { return e => setter(v => ({ ...v, [e.target.name]: e.target.value })); }
-  async function registerGateway(e) { e.preventDefault(); setError(""); try { const body = await json(`${API}/gateways/${encodeURIComponent(gatewayForm.gatewayId)}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gatewayForm) }); setGateway(body); setHotspotForm(v => ({ ...v, gatewayId: gatewayForm.gatewayId })); setMessage(`Gateway ${body.id} registered.`); await load(); } catch (x) { setError(x.message); } }
-  async function enrollHotspot(e) { e.preventDefault(); setError(""); try { const payload = { ...hotspotForm, latitude: Number(hotspotForm.latitude || 0), longitude: Number(hotspotForm.longitude || 0), speedMbps: Number(hotspotForm.speedMbps || 0), priceInr: Number(hotspotForm.priceInr || 0) }; const body = await json(`${API}/hotspots/enroll`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); setMessage(`Hotspot ${body.name} enrolled.`); await load(); } catch (x) { setError(x.message); } }
-  function prepareEnrollment(h) { setHotspotForm(v => ({ ...v, ssid: h.ssid, bssid: h.bssid || "", gatewayId: h.gatewayId || gatewayForm.gatewayId })); setTab("provider"); setMessage(`Prepared ${h.ssid} for enrollment.`); }
+
+  async function registerGateway(e) {
+    e.preventDefault(); setError(""); setMessage("");
+    try { const body = await json(`${API}/gateways/${encodeURIComponent(gatewayForm.gatewayId)}/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gatewayForm) }); setGateway(body); setHotspotForm(v => ({ ...v, gatewayId: gatewayForm.gatewayId })); setMessage(`Gateway ${body.id} registered.`); await load(); }
+    catch (x) { setError(x.message); }
+  }
+
+  function prepareEnrollment(h) {
+    setHotspotForm(v => ({ ...v, ssid: h.ssid, bssid: h.bssid || "", gatewayId: h.gatewayId || gatewayForm.gatewayId }));
+    setMessage(`Prepared ${h.ssid} for enrollment.`); setTab("provider");
+  }
+
+  async function enrollHotspot(e) {
+    e.preventDefault(); setError(""); setMessage("");
+    try {
+      const payload = { ...hotspotForm, latitude: Number(hotspotForm.latitude || 0), longitude: Number(hotspotForm.longitude || 0), speedMbps: Number(hotspotForm.speedMbps || 0), priceInr: Number(hotspotForm.priceInr || 0) };
+      const body = await json(`${API}/hotspots/enroll`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      setMessage(`Hotspot ${body.name} enrolled as ${body.id}.`); await load();
+    } catch (x) { setError(x.message); }
+  }
 
   const onlineGateways = gateways.filter(g => g.status === "ONLINE").length;
   const managedOnline = hotspots.filter(h => h.status === "ONLINE").length;
@@ -87,25 +108,23 @@ export default function Home() {
 
     {tab === "discover" ? <>
       {localMode && <section className="local-card"><div><StatusPill good>LOCAL ACCESS</StatusPill><h2>This device is on the NetworkStream gateway</h2><p>The local portal remains reachable before Internet authorization.</p></div><div className="identity"><small>Detected client IP</small><b>{client?.clientIp || "detecting…"}</b><small>Gateway</small><b>192.168.137.1</b></div></section>}
-      <section><div className="section-head"><div><h2>Available NetworkStream hotspots</h2><p>Only enrolled networks are eligible for authorization.</p></div><StatusPill good>{managedOnline} ONLINE</StatusPill></div><div className="grid">{hotspots.map(h => <article className="card" key={h.id}><div className="meta"><StatusPill good={h.status === "ONLINE"}>{h.status}</StatusPill><span>{h.accessType}</span></div><h2>{h.name}</h2><p>{h.providerName}</p><div className="stats"><div><b>{h.speedMbps} Mbps</b><small>advertised</small></div><div><b>{h.priceInr ? `₹${h.priceInr}` : "Free"}</b><small>price</small></div></div><button disabled={h.status !== "ONLINE"} onClick={() => connect(h)}>{client?.clientIp ? "Authorize this device" : "Connect session"}</button></article>)}</div>{hotspots.length === 0 && <article className="card"><p>No managed hotspots are enrolled yet.</p></article>}</section>
-      <section><div className="section-head"><div><h2>Nearby Wi-Fi intelligence</h2><p>Real radio observations from gateways; observations are not automatically managed networks.</p></div><span className="muted">refresh {lastRefresh?.toLocaleTimeString() || "—"}</span></div><div className="grid">{observed.length === 0 ? <article className="card"><p>No recent gateway scan.</p></article> : observed.map(h => <article className="card" key={h.bssid || `${h.gatewayId}-${h.ssid}`}><div className="meta"><StatusPill>RADIO</StatusPill><span>{h.security || "OPEN"}</span></div><h2>{h.ssid}</h2><p className="mono">{h.bssid || "BSSID unavailable"}</p><div className="stats"><div><Signal percent={h.signalPercent}/></div><div><b>{h.frequency || "—"}</b><small>frequency</small></div></div><small>Gateway {h.gatewayId} · {new Date(h.observedAt).toLocaleTimeString()}</small><button className="light" onClick={() => prepareEnrollment(h)}>Enroll this network</button></article>)}</div></section>
+      <section><div className="section-head"><div><h2>Available NetworkStream hotspots</h2><p>Only enrolled networks are eligible for authorization.</p></div><StatusPill good>{managedOnline} ONLINE</StatusPill></div><div className="grid">{hotspots.map(h => <article className="card" key={h.id}><div className="meta"><StatusPill good={h.status === "ONLINE"}>{h.status}</StatusPill><span>{h.accessType}</span></div><h2>{h.name}</h2><p>{h.providerName}</p><div className="stats"><div><b>{h.speedMbps} Mbps</b><small>advertised</small></div><div><b>{h.priceInr ? `₹${h.priceInr}` : "Free"}</b><small>price</small></div></div><button disabled={h.status !== "ONLINE"} onClick={() => connect(h)}>{client?.clientIp ? "Authorize this device" : "Connect session"}</button></article>)}</div>{hotspots.length === 0 && <article className="card"><p>No managed hotspots are enrolled yet. Use Gateway & Provider to enroll one.</p></article>}</section>
+      <section><div className="section-head"><div><h2>Nearby Wi-Fi intelligence</h2><p>Real radio observations from gateways. An observation is not automatically a managed network.</p></div><span className="muted">refresh {lastRefresh?.toLocaleTimeString() || "—"}</span></div><div className="grid">{observed.length === 0 ? <article className="card"><p>No recent gateway scan.</p></article> : observed.map(h => <article className="card" key={h.bssid || `${h.gatewayId}-${h.ssid}`}><div className="meta"><StatusPill>RADIO</StatusPill><span>{h.security || "OPEN"}</span></div><h2>{h.ssid}</h2><p className="mono">{h.bssid || "BSSID unavailable"}</p><div className="stats"><div><Signal percent={h.signalPercent}/></div><div><b>{h.frequency || "—"}</b><small>frequency</small></div></div><small>Gateway {h.gatewayId} · {new Date(h.observedAt).toLocaleTimeString()}</small><button className="light" onClick={() => prepareEnrollment(h)}>Enroll this network</button></article>)}</div></section>
       {session && <section className="session"><div><StatusPill good={session.status === "ACTIVE"}>{session.status}</StatusPill><h2>Active session</h2><p>{session.hotspotId} · Gateway {session.gatewayId}</p></div><div className="session-grid"><div><small>Client</small><b>{session.clientIp || "not attached"}</b></div><div><small>Plan</small><b>{session.plan}</b></div><div><small>Usage</small><b>{session.usedMb}/{session.quotaMb} MB</b></div><div><small>Speed</small><b>{session.speedMbps} Mbps</b></div></div><button className="danger" onClick={() => sessionAction("end")}>Disconnect / block client</button></section>}
     </> : <section>
-      <div className="section-head"><div><h2>Gateway control room</h2><p>Telemetry is authoritative for client policy and observed Internet flow. The toggle does not guess success.</p></div><StatusPill good>{onlineGateways} ONLINE</StatusPill></div>
-      <div className="grid"><article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}><input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/><input name="hotspotId" value={gatewayForm.hotspotId} onChange={update(setGatewayForm)} placeholder="Managed hotspot ID (optional)"/><input name="version" value={gatewayForm.version} onChange={update(setGatewayForm)} placeholder="Agent version" required/><input name="hostname" value={gatewayForm.hostname} onChange={update(setGatewayForm)} placeholder="Hostname"/><button type="submit">Register gateway</button></form>{gateway && <p className="success-text">Registered: <b>{gateway.id}</b></p>}</article>
-        <article className="card"><h2>Enroll hotspot</h2><form onSubmit={enrollHotspot}><input name="ssid" value={hotspotForm.ssid} onChange={update(setHotspotForm)} placeholder="SSID" required/><input name="bssid" value={hotspotForm.bssid} onChange={update(setHotspotForm)} placeholder="BSSID"/><input name="providerName" value={hotspotForm.providerName} onChange={update(setHotspotForm)} placeholder="Provider name"/><input name="gatewayId" value={hotspotForm.gatewayId} onChange={update(setHotspotForm)} placeholder="Gateway ID" required/><div className="two"><input name="latitude" value={hotspotForm.latitude} onChange={update(setHotspotForm)} placeholder="Latitude"/><input name="longitude" value={hotspotForm.longitude} onChange={update(setHotspotForm)} placeholder="Longitude"/></div><div className="two"><input name="speedMbps" value={hotspotForm.speedMbps} onChange={update(setHotspotForm)} placeholder="Speed Mbps" required/><input name="priceInr" value={hotspotForm.priceInr} onChange={update(setHotspotForm)} placeholder="Price INR" required/></div><button type="submit">Enroll hotspot</button></form></article></div>
+      <div className="section-head"><div><h2>Gateway control room</h2><p>Telemetry is authoritative for client policy and observed Internet flow.</p></div><StatusPill good>{onlineGateways} ONLINE</StatusPill></div>
+      <div className="grid">
+        <article className="card"><h2>Register gateway</h2><form onSubmit={registerGateway}><input name="gatewayId" value={gatewayForm.gatewayId} onChange={update(setGatewayForm)} placeholder="Gateway ID" required/><input name="hotspotId" value={gatewayForm.hotspotId} onChange={update(setGatewayForm)} placeholder="Managed hotspot ID (optional)"/><input name="version" value={gatewayForm.version} onChange={update(setGatewayForm)} placeholder="Agent version" required/><input name="hostname" value={gatewayForm.hostname} onChange={update(setGatewayForm)} placeholder="Hostname"/><button type="submit">Register gateway</button></form>{gateway && <p className="success-text">Registered: <b>{gateway.id}</b></p>}</article>
+        <article className="card"><h2>Enroll hotspot</h2><form onSubmit={enrollHotspot}><input name="ssid" value={hotspotForm.ssid} onChange={update(setHotspotForm)} placeholder="SSID" required/><input name="bssid" value={hotspotForm.bssid} onChange={update(setHotspotForm)} placeholder="BSSID"/><input name="providerName" value={hotspotForm.providerName} onChange={update(setHotspotForm)} placeholder="Provider name"/><input name="gatewayId" value={hotspotForm.gatewayId} onChange={update(setHotspotForm)} placeholder="Gateway ID" required/><div className="two"><input name="latitude" value={hotspotForm.latitude} onChange={update(setHotspotForm)} placeholder="Latitude"/><input name="longitude" value={hotspotForm.longitude} onChange={update(setHotspotForm)} placeholder="Longitude"/></div><div className="two"><input name="speedMbps" value={hotspotForm.speedMbps} onChange={update(setHotspotForm)} placeholder="Speed Mbps" required/><input name="priceInr" value={hotspotForm.priceInr} onChange={update(setHotspotForm)} placeholder="Price INR" required/></div><button type="submit">Enroll hotspot</button></form></article>
+      </div>
       <h2>Live gateway telemetry</h2>
       <div className="grid">{gateways.length === 0 ? <article className="card"><p>No gateways registered.</p></article> : gateways.map(g => { const t = telemetry[g.id]; return <article className="card" key={g.id}>
-        <div className="meta"><StatusPill good={g.status === "ONLINE"}>{g.status}</StatusPill><span>{g.platform || "Windows"}</span></div>
-        <h2>{g.id}</h2><p>{g.hostname || "Hostname unavailable"} · Agent {g.version || "unknown"}</p>
+        <div className="meta"><StatusPill good={g.status === "ONLINE"}>{g.status}</StatusPill><span>{g.platform || "Windows"}</span></div><h2>{g.id}</h2><p>{g.hostname || "Hostname unavailable"} · Agent {g.version || "unknown"}</p>
         <div className="stats"><div><b>{t?.internetOnline === true ? "UPSTREAM ONLINE" : "UPSTREAM OFFLINE"}</b><small>gateway Internet</small></div><div><b>{t?.downstreamSsid || "Windows Mobile Hotspot"}</b><small>downstream Wi-Fi</small></div></div>
-        {(t?.clients || []).map(c => { const key = `${g.id}:${c.ipAddress}`; const busy = !!pending[key]; const flow = c.internetStatus || (c.authorized ? "ALLOWED_NO_FLOW" : "BLOCKED"); const good = flow === "FLOWING"; const label = busy ? "Applying…" : c.authorized ? "Block Internet" : "Allow Internet"; return <div className="client-row" key={key}>
-          <div><b>Phone B</b><small>Wi-Fi: {c.ssid || t?.downstreamSsid || "Windows Mobile Hotspot"}</small><small>IP: {c.ipAddress} · MAC: {c.macAddress}</small><small>Policy: {c.authorized ? "ALLOWED" : "BLOCKED"} · Internet: {flow.replaceAll("_", " ")}{c.activeNatSessions ? ` · ${c.activeNatSessions} NAT session${c.activeNatSessions === 1 ? "" : "s"}` : ""}</small></div>
-          <button disabled={busy} className={c.authorized ? "danger" : ""} onClick={() => toggleClient(g.id, c)}>{label}</button>
-        </div>; })}
+        {(t?.clients || []).map(c => { const key = `${g.id}:${c.ipAddress}`; const busy = !!pending[key]; const flow = c.internetStatus || (c.authorized ? "ALLOWED_NO_FLOW" : "BLOCKED"); const label = busy ? "Applying…" : c.authorized ? "Block Internet" : "Allow Internet"; return <div className="client-row" key={key}><div><b>Phone B</b><small>Wi-Fi: {c.ssid || t?.downstreamSsid || "Windows Mobile Hotspot"}</small><small>IP: {c.ipAddress} · MAC: {c.macAddress}</small><small>Policy: {c.authorized ? "ALLOWED" : "BLOCKED"} · Internet: {flow.replaceAll("_", " ")}{c.activeNatSessions ? ` · ${c.activeNatSessions} NAT session${c.activeNatSessions === 1 ? "" : "s"}` : ""}</small></div><button disabled={busy} className={c.authorized ? "danger" : ""} onClick={() => toggleClient(g.id, c)}>{label}</button></div>; })}
         {(t?.clients || []).length === 0 && <p>No downstream clients currently observed.</p>}
-        </article>; })}</div>
+      </article>; })}</div>
     </section>}
-    <footer><span>NetworkStream prototype · live gateway telemetry refreshes every second</span><span>Last refresh {lastRefresh?.toLocaleTimeString() || "—"}</span></footer>
+    <footer><span>NetworkStream prototype · gateway telemetry refreshes every 10 seconds</span><span>Last refresh {lastRefresh?.toLocaleTimeString() || "—"}</span></footer>
   </main>;
 }
