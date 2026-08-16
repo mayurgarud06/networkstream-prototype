@@ -8,13 +8,63 @@ import subprocess
 import threading
 import time
 import urllib.request
+from collections import defaultdict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.7.0-windows-agent"
+VERSION = "0.8.0-packet-dataplane"
 TEST = "https://www.google.com/generate_204"
-PREFIX = "NetworkStream-Client-"
 CLIENT_RE = re.compile(r"^192\.168\.137\.(\d{1,3})$")
+
+try:
+    import pydivert
+except ImportError:
+    pydivert = None
+
+
+class TrafficState:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.authorized = set()
+        self.clients = {}
+        self.forwarded_packets = defaultdict(int)
+        self.forwarded_bytes = defaultdict(int)
+        self.dropped_packets = defaultdict(int)
+        self.dropped_bytes = defaultdict(int)
+        self.last_traffic = {}
+        self.stop = threading.Event()
+
+    def set_authorized(self, ip, allowed):
+        with self.lock:
+            if allowed:
+                self.authorized.add(ip)
+            else:
+                self.authorized.discard(ip)
+
+    def is_authorized(self, ip):
+        with self.lock:
+            return ip in self.authorized
+
+    def snapshot_traffic(self, ip):
+        with self.lock:
+            return {
+                "forwardedPackets": self.forwarded_packets.get(ip, 0),
+                "forwardedBytes": self.forwarded_bytes.get(ip, 0),
+                "droppedPackets": self.dropped_packets.get(ip, 0),
+                "droppedBytes": self.dropped_bytes.get(ip, 0),
+                "lastTrafficAt": self.last_traffic.get(ip),
+            }
+
+    def record(self, ip, allowed, size):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.lock:
+            if allowed:
+                self.forwarded_packets[ip] += 1
+                self.forwarded_bytes[ip] += size
+            else:
+                self.dropped_packets[ip] += 1
+                self.dropped_bytes[ip] += size
+            self.last_traffic[ip] = now
 
 
 def run(command):
@@ -129,66 +179,53 @@ def valid_client(ip):
         raise ValueError("Only 192.168.137.2-254 clients can be controlled")
 
 
-def block_rule_name(ip):
-    return f"{PREFIX}{ip.replace('.', '-')}-Block"
-
-
-def remove_block_rule(ip):
-    name = block_rule_name(ip)
-    result = run(["powershell", "-NoProfile", "-Command", f"Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue"])
+def cleanup_legacy_firewall_rules():
+    result = run(["powershell", "-NoProfile", "-Command", "Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -like 'NetworkStream-Client-*'} | Remove-NetFirewallRule -ErrorAction SilentlyContinue"])
     if result.returncode and result.stderr.strip():
-        raise RuntimeError(result.stderr.strip())
+        print("legacy firewall cleanup warning:", result.stderr.strip())
 
 
-def firewall(ip, allow):
-    """Control downstream client's Internet traffic with one outbound block rule.
+def start_packet_dataplane(state):
+    if pydivert is None:
+        raise RuntimeError("PyDivert is required. Run: python -m pip install -r gateway-agent/requirements.txt")
 
-    Allow means the NetworkStream block rule is removed. Block means an outbound
-    rule is created for traffic sourced by the downstream client. No
-    OverrideBlockRules/Allow-Bypass rule is used; that parameter is IPsec-specific
-    and caused the Windows 0x80070057 error in the previous implementation.
-    """
-    valid_client(ip)
-    if not admin():
-        raise RuntimeError("Windows Firewall access denied. Run PowerShell as Administrator.")
+    # NETWORK_FORWARD sees packets that are passing through the laptop rather than
+    # sockets owned by the laptop. NetworkStream therefore makes the policy decision
+    # at the forwarding point, before Windows forwards the packet to the upstream.
+    divert = pydivert.WinDivert("forward and (ip or ipv6)", priority=1000)
+    divert.open()
 
-    name = block_rule_name(ip)
-    if allow:
-        remove_block_rule(ip)
-        return
+    def loop():
+        print("packet dataplane: ONLINE (WinDivert NETWORK_FORWARD)")
+        try:
+            for packet in divert:
+                if state.stop.is_set():
+                    break
+                src = str(getattr(packet, "src_addr", ""))
+                dst = str(getattr(packet, "dst_addr", ""))
+                client_ip = src if CLIENT_RE.fullmatch(src) else None
+                if client_ip:
+                    size = len(packet.raw)
+                    allowed = state.is_authorized(client_ip)
+                    state.record(client_ip, allowed, size)
+                    if not allowed:
+                        # Drop: do not reinject. This is the actual access-control
+                        # decision and is independent of Windows Firewall rules.
+                        continue
+                divert.send(packet)
+        except Exception as error:
+            if not state.stop.is_set():
+                print("packet dataplane failed:", error)
+        finally:
+            try:
+                divert.close()
+            except Exception:
+                pass
+            print("packet dataplane: OFFLINE")
 
-    remove_block_rule(ip)
-    command = (
-        "$ErrorActionPreference='Stop'; "
-        f"New-NetFirewallRule -DisplayName '{name}' -Direction Outbound "
-        f"-LocalAddress {ip} -Action Block -Profile Any | Out-Null"
-    )
-    result = run(["powershell", "-NoProfile", "-Command", command])
-    if result.returncode:
-        error = result.stderr.strip() or result.stdout.strip() or "Firewall update failed"
-        if "Access is denied" in error or "System Error 5" in error:
-            raise RuntimeError("Windows Firewall access denied. Run PowerShell as Administrator.")
-        raise RuntimeError(error)
-
-
-def nat_sessions(ips):
-    if not ips:
-        return {}
-    result = run(["powershell", "-NoProfile", "-Command", "Get-NetNatSession -ErrorAction Stop | Select-Object InternalSourceAddress,CreationTime | ConvertTo-Json -Compress"])
-    if result.returncode or not result.stdout.strip():
-        return {}
-    try:
-        data = json.loads(result.stdout)
-    except Exception:
-        return {}
-    if isinstance(data, dict):
-        data = [data]
-    grouped = {ip: [] for ip in ips}
-    for item in data or []:
-        ip = str(item.get("InternalSourceAddress") or "")
-        if ip in grouped:
-            grouped[ip].append(item)
-    return grouped
+    thread = threading.Thread(target=loop, name="networkstream-packet-dataplane", daemon=True)
+    thread.start()
+    return thread
 
 
 def register(api, gateway, hotspot=None):
@@ -204,15 +241,21 @@ def report_scan(api, gateway, networks):
     return post(f"{api}/api/gateways/{gateway}/scan", {"gatewayId": gateway, "observedAt": observed_at, "hotspots": [{"gatewayId": gateway, "ssid": n["ssid"], "bssid": n["bssid"], "signalDbm": n.get("signalDbm"), "signalPercent": n.get("signalPercent"), "frequency": n.get("frequency"), "security": n.get("security", "OPEN"), "observedAt": observed_at} for n in networks]})
 
 
-def report_telemetry(api, gateway, connected_clients, internet_up, upstream_name, downstream_name, authorized, sessions):
+def report_telemetry(api, gateway, connected_clients, internet_up, upstream_name, downstream_name, state):
     clients_out = []
     for client in connected_clients:
         ip = client["ipAddress"]
-        active = sessions.get(ip, [])
-        allowed = ip in authorized
-        state = "BLOCKED" if not allowed else "UPSTREAM_OFFLINE" if not internet_up else "FLOWING" if active else "ALLOWED_NO_FLOW"
-        traffic_times = [x.get("CreationTime") for x in active if x.get("CreationTime")]
-        clients_out.append({**client, "authorized": allowed, "internetStatus": state, "activeNatSessions": len(active), "lastTrafficAt": max(traffic_times, default=None)})
+        allowed = state.is_authorized(ip)
+        traffic = state.snapshot_traffic(ip)
+        if not allowed:
+            status = "BLOCKED"
+        elif not internet_up:
+            status = "UPSTREAM_OFFLINE"
+        elif traffic["forwardedPackets"] > 0:
+            status = "FLOWING"
+        else:
+            status = "ALLOWED_NO_FLOW"
+        clients_out.append({**client, "authorized": allowed, "internetStatus": status, **traffic})
     return post(f"{api}/api/gateways/{gateway}/telemetry", {"gatewayId": gateway, "observedAt": datetime.now(timezone.utc).isoformat(), "internetOnline": internet_up, "upstreamInterface": "Wi-Fi", "upstreamAddress": None, "upstreamSsid": upstream_name, "downstreamInterface": "Windows Mobile Hotspot", "downstreamAddress": "192.168.137.1", "downstreamSsid": downstream_name, "clients": clients_out})
 
 
@@ -224,16 +267,15 @@ def acknowledge(api, gateway, command_id):
     return post(f"{api}/api/gateways/{gateway}/commands/{command_id}/ack", {})
 
 
-def process_commands(api, gateway, authorized):
+def process_commands(api, gateway, state):
     for command in commands(api, gateway) or []:
         try:
             ip = command.get("value")
+            valid_client(ip)
             if command.get("type") == "ALLOW_CLIENT":
-                firewall(ip, True)
-                authorized.add(ip)
+                state.set_authorized(ip, True)
             elif command.get("type") == "BLOCK_CLIENT":
-                firewall(ip, False)
-                authorized.discard(ip)
+                state.set_authorized(ip, False)
             else:
                 raise ValueError(command.get("type"))
             acknowledge(api, gateway, command["id"])
@@ -269,23 +311,31 @@ def main():
     args = parser.parse_args()
     if args.data_plane and not admin():
         raise SystemExit("NetworkStream data-plane requires an elevated PowerShell window. Run PowerShell as Administrator.")
-    authorized = set(); managed_clients = set()
-    print("NetworkStream Windows Gateway Agent", VERSION); print("gateway:", args.gateway_id); print("host:", socket.gethostname()); print("data-plane:", "ENABLED" if args.data_plane else "observation-only")
+    if args.data_plane:
+        cleanup_legacy_firewall_rules()
+    state = TrafficState()
+    packet_thread = None
+    print("NetworkStream Windows Gateway Agent", VERSION)
+    print("gateway:", args.gateway_id)
+    print("host:", socket.gethostname())
+    print("data-plane:", "ENABLED" if args.data_plane else "observation-only")
     endpoint = local_endpoint(args.portal_port)
     try:
         print("register:", register(args.api, args.gateway_id, args.hotspot_id))
+        if args.data_plane:
+            packet_thread = start_packet_dataplane(state)
         while True:
             try:
                 print("heartbeat:", heartbeat(args.api, args.gateway_id)); internet_up = online(); print("internet:", "ONLINE" if internet_up else "OFFLINE")
-                connected = clients(); managed_clients.update(c["ipAddress"] for c in connected); upstream_name = upstream_ssid(); downstream_name = downstream_ssid()
+                connected = clients(); upstream_name = upstream_ssid(); downstream_name = downstream_ssid()
                 if args.data_plane:
-                    process_commands(args.api, args.gateway_id, authorized)
-                    for client in connected:
-                        firewall(client["ipAddress"], client["ipAddress"] in authorized)
+                    # New clients are denied by default because authorized starts empty.
+                    # An explicit ALLOW_CLIENT command is required before forwarding.
+                    process_commands(args.api, args.gateway_id, state)
                 if not args.no_scan:
                     networks = scan(); print(f"nearby Wi-Fi networks: {len(networks)}"); print("scan report:", report_scan(args.api, args.gateway_id, networks))
-                sessions = nat_sessions([c["ipAddress"] for c in connected]); print("upstream Wi-Fi:", upstream_name or "not connected"); print("downstream hotspot:", downstream_name); print("downstream clients:", connected)
-                print("telemetry:", report_telemetry(args.api, args.gateway_id, connected, internet_up, upstream_name, downstream_name, authorized, sessions)); print("authorized clients:", sorted(authorized)); print("commands:", json.dumps(commands(args.api, args.gateway_id), indent=2))
+                print("upstream Wi-Fi:", upstream_name or "not connected"); print("downstream hotspot:", downstream_name); print("downstream clients:", connected)
+                print("telemetry:", report_telemetry(args.api, args.gateway_id, connected, internet_up, upstream_name, downstream_name, state)); print("authorized clients:", sorted(state.authorized)); print("commands:", json.dumps(commands(args.api, args.gateway_id), indent=2))
             except Exception as error:
                 print("gateway communication failed:", error)
             if args.once: break
@@ -293,10 +343,9 @@ def main():
     except KeyboardInterrupt:
         print("stopping Windows gateway agent")
     finally:
-        if args.data_plane:
-            for ip in managed_clients:
-                try: firewall(ip, True)
-                except Exception as error: print("firewall cleanup failed:", ip, error)
+        state.stop.set()
+        if packet_thread and packet_thread.is_alive():
+            packet_thread.join(timeout=2)
         endpoint.shutdown()
 
 
