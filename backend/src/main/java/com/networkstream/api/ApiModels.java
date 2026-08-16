@@ -29,6 +29,7 @@ public final class ApiModels {
     public record GatewayCommand(String id, String type, String sessionId, String value) {}
 
     public record GatewayScanResponse(String status) {}
+    public record OperationResponse(String status) {}
 
     public record HotspotScanReport(String gatewayId, Instant observedAt, List<HotspotObservation> hotspots) {}
     public record HotspotObservation(String gatewayId, String ssid, String bssid, Integer signalDbm,
