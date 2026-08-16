@@ -1,5 +1,9 @@
 FROM node:20-alpine
 WORKDIR /app
+
+ARG BACKEND_URL=http://localhost:8080
+ENV BACKEND_URL=${BACKEND_URL}
+
 COPY package.json ./
 RUN npm install
 COPY . .
