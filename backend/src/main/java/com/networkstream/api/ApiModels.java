@@ -42,9 +42,11 @@ public final class ApiModels {
     }
 
     public record GatewayTelemetry(String gatewayId, Instant observedAt, boolean internetOnline,
-                                   String upstreamInterface, String upstreamAddress,
+                                   String upstreamInterface, String upstreamAddress, String upstreamSsid,
                                    String downstreamInterface, String downstreamAddress,
-                                   List<GatewayClient> clients) {}
+                                   String downstreamSsid, List<GatewayClient> clients) {}
 
-    public record GatewayClient(String ipAddress, String macAddress, String hostname) {}
+    public record GatewayClient(String ipAddress, String macAddress, String hostname,
+                                boolean authorized, String internetStatus, int activeNatSessions,
+                                Instant lastTrafficAt) {}
 }
