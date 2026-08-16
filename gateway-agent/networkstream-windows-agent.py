@@ -4,6 +4,11 @@
 Safe by default: scans Wi-Fi, reports gateway/client telemetry and keeps the
 control-plane alive. With --data-plane it blocks every newly discovered
 Windows Mobile Hotspot client until NetworkStream authorizes that client.
+
+Telemetry deliberately separates policy from observed traffic:
+- authorized: the NetworkStream policy currently applied to the client
+- internetStatus: BLOCKED, ALLOWED_NO_FLOW, FLOWING, or UPSTREAM_OFFLINE
+- activeNatSessions: active Windows NAT sessions attributable to the client
 """
 import argparse
 import json
@@ -161,7 +166,47 @@ def downstream_ssid():
             match = re.search(r"SSID name\s*:\s*(.*)$", line, re.I)
             if match and match.group(1).strip():
                 return match.group(1).strip()
+    # Windows Mobile Hotspot does not expose its SSID through hostednetwork on
+    # every Windows build. Keep the value explicit rather than pretending the
+    # upstream Wi-Fi SSID is the downstream hotspot name.
     return "Windows Mobile Hotspot"
+
+
+def nat_sessions_for_clients(client_ips):
+    """Return active WinNAT sessions grouped by downstream client IP.
+
+    Get-NetNatSession is available on Windows NAT stacks used by Internet
+    Connection Sharing. If the cmdlet is unavailable, report zero sessions;
+    policy state remains authoritative and the UI will show ALLOWED_NO_FLOW.
+    """
+    if not client_ips:
+        return {}
+    command = "Get-NetNatSession -ErrorAction Stop | Select-Object InternalSourceAddress,CreationTime | ConvertTo-Json -Compress"
+    result = run(["powershell", "-NoProfile", "-Command", command])
+    if result.returncode != 0 or not result.stdout.strip():
+        return {}
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, dict):
+        data = [data]
+    grouped = {ip: [] for ip in client_ips}
+    for item in data or []:
+        ip = str(item.get("InternalSourceAddress") or "")
+        if ip in grouped:
+            grouped[ip].append(item)
+    return grouped
+
+
+def client_internet_state(ip, authorized, upstream_online, nat_sessions):
+    if not authorized:
+        return "BLOCKED"
+    if not upstream_online:
+        return "UPSTREAM_OFFLINE"
+    if nat_sessions > 0:
+        return "FLOWING"
+    return "ALLOWED_NO_FLOW"
 
 
 def register(api, gateway_id, hotspot_id=None):
@@ -178,9 +223,18 @@ def report_scan(api, gateway_id, networks):
     return post_json(f"{api}/api/gateways/{gateway_id}/scan", payload)
 
 
-def report_telemetry(api, gateway_id, clients, internet_online, downstream_name, authorized_ips):
-    enriched = [dict(client, authorized=client["ipAddress"] in authorized_ips) for client in clients]
-    payload = {"gatewayId": gateway_id, "observedAt": datetime.now(timezone.utc).isoformat(), "internetOnline": internet_online, "upstreamInterface": "Wi-Fi", "upstreamAddress": None, "downstreamInterface": "Windows Mobile Hotspot", "downstreamAddress": "192.168.137.1", "downstreamSsid": downstream_name, "clients": enriched}
+def report_telemetry(api, gateway_id, clients, internet_online, downstream_name, authorized_ips, nat_sessions):
+    now = datetime.now(timezone.utc)
+    enriched = []
+    for client in clients:
+        ip = client["ipAddress"]
+        sessions = nat_sessions.get(ip, [])
+        enriched.append(dict(client,
+                             authorized=ip in authorized_ips,
+                             internetStatus=client_internet_state(ip, ip in authorized_ips, internet_online, len(sessions)),
+                             activeNatSessions=len(sessions),
+                             lastTrafficAt=max((s.get("CreationTime") for s in sessions if s.get("CreationTime")), default=None)))
+    payload = {"gatewayId": gateway_id, "observedAt": now.isoformat(), "internetOnline": internet_online, "upstreamInterface": "Wi-Fi", "upstreamAddress": None, "downstreamInterface": "Windows Mobile Hotspot", "downstreamAddress": "192.168.137.1", "downstreamSsid": downstream_name, "clients": enriched}
     return post_json(f"{api}/api/gateways/{gateway_id}/telemetry", payload)
 
 
@@ -292,8 +346,9 @@ def main():
                     print(f"nearby Wi-Fi networks: {len(networks)}")
                     print("scan report:", report_scan(args.api, args.gateway_id, networks))
 
+                nat_sessions = nat_sessions_for_clients([c["ipAddress"] for c in clients])
                 print("downstream clients:", clients)
-                print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online, downstream_name, authorized_ips))
+                print("telemetry:", report_telemetry(args.api, args.gateway_id, clients, online, downstream_name, authorized_ips, nat_sessions))
                 print("authorized clients:", sorted(authorized_ips))
                 print("policy:", json.dumps(get_policy(args.api, args.gateway_id), indent=2))
                 print("commands:", json.dumps(get_commands(args.api, args.gateway_id), indent=2))
