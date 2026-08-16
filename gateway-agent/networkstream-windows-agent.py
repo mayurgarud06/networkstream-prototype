@@ -26,7 +26,6 @@ class TrafficState:
     def __init__(self):
         self.lock = threading.RLock()
         self.authorized = set()
-        self.clients = {}
         self.forwarded_packets = defaultdict(int)
         self.forwarded_bytes = defaultdict(int)
         self.dropped_packets = defaultdict(int)
@@ -188,11 +187,12 @@ def cleanup_legacy_firewall_rules():
 def start_packet_dataplane(state):
     if pydivert is None:
         raise RuntimeError("PyDivert is required. Run: python -m pip install -r gateway-agent/requirements.txt")
+    if not hasattr(pydivert, "Layer") or not hasattr(pydivert.Layer, "NETWORK_FORWARD"):
+        raise RuntimeError("Installed PyDivert does not expose NETWORK_FORWARD; install the pinned gateway-agent/requirements.txt dependency")
 
-    # NETWORK_FORWARD sees packets that are passing through the laptop rather than
-    # sockets owned by the laptop. NetworkStream therefore makes the policy decision
-    # at the forwarding point, before Windows forwards the packet to the upstream.
-    divert = pydivert.WinDivert("forward and (ip or ipv6)", priority=1000)
+    # NETWORK_FORWARD sees packets passing through the laptop. This is the
+    # NetworkStream enforcement point for Windows Mobile Hotspot forwarding.
+    divert = pydivert.WinDivert("ip or ipv6", layer=pydivert.Layer.NETWORK_FORWARD, priority=1000)
     divert.open()
 
     def loop():
@@ -202,15 +202,14 @@ def start_packet_dataplane(state):
                 if state.stop.is_set():
                     break
                 src = str(getattr(packet, "src_addr", ""))
-                dst = str(getattr(packet, "dst_addr", ""))
                 client_ip = src if CLIENT_RE.fullmatch(src) else None
                 if client_ip:
                     size = len(packet.raw)
                     allowed = state.is_authorized(client_ip)
                     state.record(client_ip, allowed, size)
                     if not allowed:
-                        # Drop: do not reinject. This is the actual access-control
-                        # decision and is independent of Windows Firewall rules.
+                        # Drop by not reinjecting the packet. No Windows Firewall
+                        # rule is involved in the policy decision.
                         continue
                 divert.send(packet)
         except Exception as error:
@@ -329,8 +328,6 @@ def main():
                 print("heartbeat:", heartbeat(args.api, args.gateway_id)); internet_up = online(); print("internet:", "ONLINE" if internet_up else "OFFLINE")
                 connected = clients(); upstream_name = upstream_ssid(); downstream_name = downstream_ssid()
                 if args.data_plane:
-                    # New clients are denied by default because authorized starts empty.
-                    # An explicit ALLOW_CLIENT command is required before forwarding.
                     process_commands(args.api, args.gateway_id, state)
                 if not args.no_scan:
                     networks = scan(); print(f"nearby Wi-Fi networks: {len(networks)}"); print("scan report:", report_scan(args.api, args.gateway_id, networks))
