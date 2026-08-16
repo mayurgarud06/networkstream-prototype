@@ -51,7 +51,6 @@ def online():
 
 
 def upstream_ssid():
-    """Return the SSID of the laptop's active infrastructure Wi-Fi connection."""
     result = run(["netsh", "wlan", "show", "interfaces"])
     if result.returncode:
         return None
@@ -63,9 +62,6 @@ def upstream_ssid():
 
 
 def downstream_ssid():
-    # Windows Mobile Hotspot uses newer Wi-Fi Direct/WDI plumbing; legacy
-    # `show hostednetwork` may not expose it. Keep the explicit configured
-    # hosted-network value when available and otherwise use a stable label.
     result = run(["netsh", "wlan", "show", "hostednetwork"])
     if not result.returncode:
         for line in result.stdout.splitlines():
@@ -147,17 +143,36 @@ def rule_names(ip):
 
 
 def firewall(ip, allow):
+    """Apply/remove the per-client Windows firewall policy.
+
+    The block rule intentionally leaves the local NetworkStream portal ports
+    reachable. PowerShell is run with an explicit Boolean value for
+    OverrideBlockRules; passing the text 'True' causes the parameter-binding
+    error seen on Windows.
+    """
     valid_client(ip)
+    if not admin():
+        raise RuntimeError("Windows Firewall access denied. Run PowerShell as Administrator.")
+
     block_name, portal_name = rule_names(ip)
-    run(["powershell", "-NoProfile", "-Command",
-         f"Remove-NetFirewallRule -DisplayName '{block_name}' -ErrorAction SilentlyContinue; "
-         f"Remove-NetFirewallRule -DisplayName '{portal_name}' -ErrorAction SilentlyContinue"])
+    remove = (
+        f"Remove-NetFirewallRule -DisplayName '{block_name}' -ErrorAction SilentlyContinue; "
+        f"Remove-NetFirewallRule -DisplayName '{portal_name}' -ErrorAction SilentlyContinue"
+    )
+    cleanup = run(["powershell", "-NoProfile", "-Command", remove])
+    if cleanup.returncode and cleanup.stderr.strip():
+        raise RuntimeError(cleanup.stderr.strip())
+
     if allow:
         return
+
     command = (
-        f"New-NetFirewallRule -DisplayName '{block_name}' -Direction Inbound -RemoteAddress {ip} -Action Block -Profile Any; "
-        f"New-NetFirewallRule -DisplayName '{portal_name}' -Direction Inbound -RemoteAddress {ip} "
-        f"-Protocol TCP -LocalPort 3000,8081 -Action Allow -Profile Any -OverrideBlockRules $true"
+        "$ErrorActionPreference='Stop'; "
+        f"New-NetFirewallRule -DisplayName '{block_name}' -Direction Inbound "
+        f"-RemoteAddress {ip} -Action Block -Profile Any | Out-Null; "
+        f"New-NetFirewallRule -DisplayName '{portal_name}' -Direction Inbound "
+        f"-RemoteAddress {ip} -Protocol TCP -LocalPort 3000,8081 "
+        f"-Action Allow -Profile Any -OverrideBlockRules 1 | Out-Null"
     )
     result = run(["powershell", "-NoProfile", "-Command", command])
     if result.returncode:
@@ -339,8 +354,10 @@ def main():
                 print("upstream Wi-Fi:", upstream_name or "not connected")
                 print("downstream hotspot:", downstream_name)
                 print("downstream clients:", connected)
-                print("telemetry:", report_telemetry(args.api, args.gateway_id, connected, internet_up,
-                                                        upstream_name, downstream_name, authorized, sessions))
+                print("telemetry:", report_telemetry(api=args.api, gateway=args.gateway_id,
+                                                        connected_clients=connected, internet_up=internet_up,
+                                                        upstream_name=upstream_name, downstream_name=downstream_name,
+                                                        authorized=authorized, sessions=sessions))
                 print("authorized clients:", sorted(authorized))
                 print("commands:", json.dumps(commands(args.api, args.gateway_id), indent=2))
             except Exception as error:
